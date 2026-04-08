@@ -30,6 +30,7 @@ class PaginationParams:
         self.offset = offset
 
 
+PaginatedResponse = PaginationParams
 Pagination = Annotated[PaginationParams, Depends(PaginationParams)]
 
 

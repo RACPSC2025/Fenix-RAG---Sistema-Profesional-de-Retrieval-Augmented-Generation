@@ -61,7 +61,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Fénix RAG API",
         description=(
-            "Sistema de consulta legal colombiana con retrieval híbrido y auto-reflexión.\n\n"
+            "Sistema Profesional de Retrieval-Augmented Generation con retrieval híbrido y auto-reflexión.\n\n"
             "**Stack:** LangGraph · LangChain · AWS Bedrock · Chroma · PostgreSQL"
         ),
         version="1.0.0",
