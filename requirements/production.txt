@@ -1,0 +1,23 @@
+# ─── Production dependencies ───────────────────────────────────────────────────
+#
+# Instalar: pip install -r requirements/production.txt
+#
+# Incluye todas las dependencias de base.txt más herramientas de producción.
+# NO incluye dev tools ni testing.
+
+-r base.txt
+
+# ─── Production ASGI ────────────────────────────────────────────────────────────
+uvloop>=0.21
+httptools>=0.6
+gunicorn>=23.0
+
+# ─── Production DB ──────────────────────────────────────────────────────────────
+langgraph-checkpoint-postgres>=2.0
+
+# ─── Monitoring ─────────────────────────────────────────────────────────────────
+sentry-sdk[fastapi]>=2.19
+prometheus-client>=0.21
+
+# ─── Security ───────────────────────────────────────────────────────────────────
+cryptography>=44.0  # para EncryptedSerializer en checkpoints

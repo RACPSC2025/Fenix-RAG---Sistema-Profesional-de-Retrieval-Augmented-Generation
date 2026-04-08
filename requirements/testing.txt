@@ -1,0 +1,25 @@
+# ─── Testing dependencies ──────────────────────────────────────────────────────
+#
+# Instalar: pip install -r requirements/testing.txt
+#
+# Incluye todas las dependencias de base.txt más herramientas de testing
+# y evaluación RAG.
+
+-r base.txt
+
+# ─── Testing ────────────────────────────────────────────────────────────────────
+pytest>=8.3
+pytest-asyncio>=0.24
+pytest-cov>=6.0
+pytest-mock>=3.14
+factory-boy>=3.3
+
+# ─── SQLite para tests (más rápido que PostgreSQL en CI) ───────────────────────
+aiosqlite>=0.20
+
+# ─── RAG Evaluation ─────────────────────────────────────────────────────────────
+ragas>=0.1
+deepeval>=1.0
+
+# ─── Coverage reports ───────────────────────────────────────────────────────────
+coverage[toml]>=7.6

@@ -1,0 +1,58 @@
+# ─── Base dependencies — all environments ─────────────────────────────────────
+#
+# Instalar: pip install -r requirements/base.txt
+#
+# Estas son las dependencias mínimas para que la aplicación funcione.
+# development.txt, testing.txt y production.txt incluyen este archivo.
+
+# ─── Core AI ────────────────────────────────────────────────────────────────────
+langchain>=0.3
+langchain-aws>=0.2
+langchain-chroma>=0.1
+langchain-community>=0.3
+langgraph>=0.2
+langgraph-checkpoint>=2.0
+langgraph-checkpoint-sqlite>=2.0
+
+# ─── Ingestion: PDF ──────────────────────────────────────────────────────────────
+pymupdf>=1.24
+docling>=2.0
+
+# ─── Ingestion: OCR ──────────────────────────────────────────────────────────────
+easyocr>=1.7
+opencv-python-headless>=4.10
+Pillow>=11.0
+
+# ─── Ingestion: Office ───────────────────────────────────────────────────────────
+python-docx>=1.1
+openpyxl>=3.1
+pandas>=2.2
+
+# ─── Ingestion: Detección ────────────────────────────────────────────────────────
+python-magic>=0.4
+
+# ─── Retrieval ───────────────────────────────────────────────────────────────────
+rank-bm25>=0.2
+flashrank>=0.2
+spacy>=3.7
+
+# ─── Persistence ─────────────────────────────────────────────────────────────────
+sqlalchemy[asyncio]>=2.0
+alembic>=1.13
+psycopg[binary]>=3.2
+asyncpg>=0.30
+
+# ─── API ─────────────────────────────────────────────────────────────────────────
+fastapi>=0.115
+uvicorn[standard]>=0.32
+python-multipart>=0.0.9   # para UploadFile
+
+# ─── MCP ─────────────────────────────────────────────────────────────────────────
+mcp>=1.0
+
+# ─── Config & Utilities ──────────────────────────────────────────────────────────
+pydantic-settings>=2.5
+structlog>=24.4
+tenacity>=9.0
+python-dotenv>=1.0
+httpx>=0.27

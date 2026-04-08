@@ -1,0 +1,28 @@
+# ─── Development dependencies ──────────────────────────────────────────────────
+#
+# Instalar: pip install -r requirements/development.txt
+#
+# Incluye todas las dependencias de base.txt más herramientas de desarrollo.
+
+-r base.txt
+
+# ─── Linting & Formatting ──────────────────────────────────────────────────────
+ruff>=0.8
+black>=24.10
+mypy>=1.13
+
+# ─── Testing ────────────────────────────────────────────────────────────────────
+pytest>=8.3
+pytest-asyncio>=0.24
+pytest-cov>=6.0
+pytest-mock>=3.14
+factory-boy>=3.3
+
+# ─── Dev tools ──────────────────────────────────────────────────────────────────
+ipython>=8.29
+ipdb>=0.13
+watchfiles>=1.0
+
+# ─── Hot reload ─────────────────────────────────────────────────────────────────
+uvloop>=0.21
+httptools>=0.6
