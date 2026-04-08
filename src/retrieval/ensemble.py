@@ -66,6 +66,8 @@ class EnsembleRetriever(BaseRetriever):
         use_reranking: bool = True,
         reranker: Reranker | None = None,
         top_k: int | None = None,
+        use_context_enrichment: bool = False,
+        context_window_size: int = 2,
     ) -> None:
         """
         Args:
@@ -74,6 +76,8 @@ class EnsembleRetriever(BaseRetriever):
             use_reranking: Si True, aplica FlashRank al resultado final.
             reranker: Instancia de Reranker. None = usa singleton.
             top_k: Override del top_k de settings.
+            use_context_enrichment: Si True, agrega chunks vecinos a cada resultado.
+            context_window_size: Número de vecinos a cada lado (1 = prev+current+next).
         """
         settings = get_settings()
         self._vector_store = vector_store
@@ -82,6 +86,16 @@ class EnsembleRetriever(BaseRetriever):
         self._reranker = reranker or get_reranker()
         self._top_k = top_k or settings.retrieval_top_k
         self._rerank_top_k = settings.retrieval_rerank_top_k
+
+        # Context enrichment (optional — enriches retrieved docs with neighbors)
+        self._use_context_enrichment = use_context_enrichment
+        self._context_enricher = None
+        if use_context_enrichment:
+            from src.retrieval.context_enricher import ContextEnrichmentWindow  # noqa: PLC0415
+            self._context_enricher = ContextEnrichmentWindow(
+                vector_store=vector_store,
+                window_size=context_window_size,
+            )
 
         # Retrievers lazy-initialized para no crear conexiones innecesarias
         self._bm25: Any | None = None
@@ -245,7 +259,16 @@ class EnsembleRetriever(BaseRetriever):
                 before=len(candidates),
                 after=len(reranked),
             )
-            return reranked
+            candidates = reranked
+
+        # 4. Context enrichment (agrega vecinos a cada chunk recuperado)
+        if self._use_context_enrichment and self._context_enricher and candidates:
+            candidates = self._context_enricher.enrich(candidates)
+            log.debug(
+                "ensemble_context_enriched",
+                docs=len(candidates),
+                window_size=self._context_enricher._window_size,
+            )
 
         return candidates[:self._top_k]
 
@@ -310,5 +333,13 @@ def get_ensemble_retriever(
     vector_store: VectorStore,
     **kwargs,
 ) -> EnsembleRetriever:
-    """Factory function para EnsembleRetriever."""
+    """Factory function para EnsembleRetriever.
+
+    Args kwargs:
+        strategy: RetrievalStrategy (default AUTO)
+        use_reranking: bool (default True)
+        top_k: int (default de settings)
+        use_context_enrichment: bool (default False)
+        context_window_size: int (default 2)
+    """
     return EnsembleRetriever(vector_store=vector_store, **kwargs)
