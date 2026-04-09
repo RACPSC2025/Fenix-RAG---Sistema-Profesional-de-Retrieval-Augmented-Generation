@@ -48,6 +48,7 @@ class RetrievalStrategy(StrEnum):
     HYBRID       = "hybrid"
     HIERARCHICAL = "hierarchical"
     FULL         = "full"
+    PARENT_CHILD = "parent_child"
     AUTO         = "auto"
 
 
@@ -101,6 +102,7 @@ class EnsembleRetriever(BaseRetriever):
         self._bm25: Any | None = None
         self._hybrid: Any | None = None
         self._hierarchical: Any | None = None
+        self._parent_child: Any | None = None
 
     @property
     def retriever_type(self) -> str:
@@ -133,6 +135,17 @@ class EnsembleRetriever(BaseRetriever):
                 detail_store=self._vector_store,
             )
         return self._hierarchical
+
+    def _get_parent_child(self) -> Any:
+        if self._parent_child is None:
+            from langchain.storage import InMemoryByteStore  # noqa: PLC0415
+            from src.retrieval.parent_child import ParentChildRetriever  # noqa: PLC0415
+            self._parent_child = ParentChildRetriever(
+                child_vector_store=self._vector_store,
+                parent_store=InMemoryByteStore(),
+                top_k=self._top_k,
+            )
+        return self._parent_child
 
     # ── Selección de estrategia ───────────────────────────────────────────────
 
@@ -207,6 +220,10 @@ class EnsembleRetriever(BaseRetriever):
                 if doc_id not in seen:
                     seen.add(doc_id)
                     docs.append(doc)
+
+        elif strategy == RetrievalStrategy.PARENT_CHILD:
+            result = self._get_parent_child().retrieve(fetch_query)
+            docs = result.documents
 
         else:
             docs = self._vector_store.similarity_search(fetch_query)
