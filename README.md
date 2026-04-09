@@ -205,7 +205,8 @@ racodex/
 |-----------|-----------|
 | [`docs/super_agent_architecture.md`](docs/super_agent_architecture.md) | Arquitectura completa, stack, plan de acción por fases (13 fases), glosario de conceptos |
 | [`docs/08012026.md`](docs/08012026.md) | Diario de desarrollo — registro de cambios, decisiones, hallazgos |
-| [`agent_skills/`](agent_skills/) | Referencia técnica de skills del agente (RAG Mastery, Agentic Patterns, etc.) |
+| [`agent_skills/`](agent_skills/) | 📚 **Documentación técnica de referencia** — skills del agente (RAG Mastery, Agentic Patterns, Engineering Fundamentals). Úsalas como guía para tu propio RAG. |
+| [`agent.md`](agent.md) | 🧠 Instrucciones operativas del agente asistente — cómo piensa, cómo trabaja, cómo documenta |
 
 ---
 
