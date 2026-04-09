@@ -161,8 +161,9 @@ class DocumentClassifierSkill:
 
         # ── Word ──────────────────────────────────────────────────────────────
         if mime.is_word:
-            doc_type = "contrato" if self._looks_like_contract(path) else "decreto"
-            cleaner = "contract" if doc_type == "contrato" else "legal_colombia"
+            content_sample = self._read_sample(path, mime)
+            doc_type = "technical_doc" if self._looks_like_technical_doc(path, content_sample) else "standard"
+            cleaner = "technical" if doc_type == "technical_doc" else "default"
             return self._make_plan(
                 path, mime,
                 loader_type="word",
@@ -212,17 +213,19 @@ class DocumentClassifierSkill:
     ) -> tuple[IngestionPlan, float]:
         """Clasificación específica para PDFs según calidad y características."""
 
-        # Sin datos de calidad → asumir OCR (más seguro)
+        # Sin datos de calidad → PyMuPDF es más seguro como fallback que OCR
+        # OCR sobre un PDF nativo con protección de copia produce resultados peores
         if quality is None:
+            content_sample = self._read_sample(path, mime)
             return self._make_plan(
                 path, mime,
-                loader_type="ocr",
-                cleaner_profile="ocr_output",
-                requires_ocr=True,
-                document_type="decreto",
-                confidence=0.50,
-                reasoning="No se pudo analizar calidad PDF — asumiendo escaneado",
-            ), 0.50
+                loader_type="pymupdf",
+                cleaner_profile="default",
+                requires_ocr=False,
+                document_type=self._infer_doc_type_from_name(path, content_sample),
+                confidence=0.45,
+                reasoning="Calidad PDF indeterminada — PyMuPDF como fallback seguro",
+            ), 0.45
 
         # PDF escaneado con alta confianza
         if quality.is_scanned and quality.confidence >= 0.80:
@@ -253,7 +256,7 @@ class DocumentClassifierSkill:
         return self._make_plan(
             path, mime,
             loader_type="pymupdf",
-            cleaner_profile="legal_colombia",
+            cleaner_profile="default",
             requires_ocr=False,
             document_type=self._infer_doc_type_from_name(path),
             confidence=0.55,
@@ -271,17 +274,12 @@ class DocumentClassifierSkill:
         """
         doc_type = self._infer_doc_type_from_name(path)
 
-        # Decreto 1072 específico
-        if "1072" in path.name.lower() and "decreto" in path.name.lower():
-            return "pymupdf", "decreto_1072", "decreto"
-
-        # PDFs con muchas páginas → posiblemente con tablas
+        # PDFs con muchas páginas → posiblemente con tablas/layouts complejos
         if quality.total_pages > 50:
-            return "docling", "legal_colombia", doc_type
+            return "docling", "default", doc_type
 
         # Corto y nativo → PyMuPDF
-        cleaner = "contract" if doc_type == "contrato" else "legal_colombia"
-        return "pymupdf", cleaner, doc_type
+        return "pymupdf", "default", doc_type
 
     # ── Clasificación con LLM ─────────────────────────────────────────────────
 
@@ -365,37 +363,106 @@ class DocumentClassifierSkill:
             reasoning=f"Fallback: {reason}",
         )
 
-    def _infer_doc_type_from_name(self, path: Path) -> str:
-        """Infiere el tipo de documento desde el nombre del archivo."""
-        name = path.stem.lower()
-        if any(k in name for k in ["decreto", "dec_", "d_"]):
-            return "decreto"
-        if any(k in name for k in ["resolucion", "resol", "res_"]):
-            return "resolución"
-        if any(k in name for k in ["circular", "circ"]):
-            return "circular"
-        if any(k in name for k in ["contrato", "cont_", "acuerdo"]):
-            return "contrato"
-        if any(k in name for k in ["ley", "ley_"]):
-            return "ley"
-        return "decreto"  # default para normativa colombiana
+    def _infer_doc_type_from_name(self, path: Path, content_sample: str = "") -> str:
+        """
+        Infiere el tipo de documento desde el nombre y opcionalmente el contenido.
 
-    def _looks_like_contract(self, path: Path) -> bool:
-        """Heurística simple: el nombre sugiere que es un contrato."""
+        Tipos genéricos para un asistente de desarrollo de propósito general.
+        """
         name = path.stem.lower()
-        return any(k in name for k in ["contrato", "acuerdo", "convenio", "otrosi"])
 
-    def _read_sample(self, path: Path, mime: MimeDetectionResult) -> str:
-        """Lee una muestra del contenido para el clasificador LLM."""
+        # Señales en el nombre
+        if any(k in name for k in ["readme", "tutorial", "guide", "getting_started"]):
+            return "documentation"
+        if any(k in name for k in ["api", "openapi", "swagger", "endpoints"]):
+            return "api_docs"
+        if any(k in name for k in ["architecture", "design", "adr", "tech_spec"]):
+            return "architecture"
+        if any(k in name for k in ["contract", "sla", "agreement"]):
+            return "contract"
+        if any(k in name for k in ["policy", "compliance", "security_policy"]):
+            return "policy"
+
+        # Señales en el contenido (cuando el nombre no da señal clara)
+        if content_sample:
+            sample_lower = content_sample.lower()
+            if any(k in sample_lower for k in ["api endpoint", "request body", "response 200"]):
+                return "api_docs"
+            if any(k in sample_lower for k in ["function", "parameter", "returns", "throws"]):
+                return "documentation"
+            if any(k in sample_lower for k in ["architecture", "microservice", "component"]):
+                return "architecture"
+            if any(k in sample_lower for k in ["clause", "party agrees", "terms and conditions"]):
+                return "contract"
+
+        return "standard"  # tipo genérico por defecto
+
+    def _looks_like_technical_doc(self, path: Path, content_sample: str = "") -> bool:
+        """
+        Detecta si un documento es técnico por nombre o contenido.
+        """
+        name = path.stem.lower()
+        tech_keywords = ["readme", "guide", "tutorial", "api", "docs", "spec", "architecture"]
+        if any(k in name for k in tech_keywords):
+            return True
+
+        if content_sample:
+            sample_lower = content_sample.lower()
+            tech_content = ["function", "class", "api", "endpoint", "parameter", "returns", "throws", "implementation"]
+            if any(k in sample_lower for k in tech_content):
+                return True
+
+        return False
+
+    def _looks_like_contract(self, path: Path, content_sample: str = "") -> bool:
+        """
+        Detecta si un documento es un contrato por nombre o contenido.
+        """
+        name = path.stem.lower()
+        contract_keywords = ["contract", "agreement", "terms", "conditions", "sla"]
+        if any(k in name for k in contract_keywords):
+            return True
+
+        if content_sample:
+            sample_lower = content_sample.lower()
+            if any(k in sample_lower for k in ["clause", "party agrees", "terms and conditions"]):
+                return True
+
+        return False
+
+    def _read_sample(self, path: Path, mime: MimeDetectionResult, max_chars: int = 800) -> str:
+        """
+        Lee muestra del contenido priorizando páginas con texto real.
+
+        Para PDFs: busca la primera página con >100 chars, no necesariamente la primera.
+        Para Word: lee los primeros 20 párrafos con texto.
+        Para Excel: lee las primeras 5 filas como string.
+        """
         try:
             if mime.is_pdf:
                 import fitz  # noqa: PLC0415
                 doc = fitz.open(str(path))
-                text = doc[0].get_text("text") if len(doc) > 0 else ""
+                for page in doc:
+                    text = page.get_text("text").strip()
+                    if len(text) > 100:
+                        doc.close()
+                        return text[:max_chars]
                 doc.close()
-                return text[:500]
-        except Exception:
-            pass
+                return ""
+
+            if mime.is_word:
+                import docx  # noqa: PLC0415
+                d = docx.Document(str(path))
+                text = "\n".join(p.text for p in d.paragraphs[:20] if p.text.strip())
+                return text[:max_chars]
+
+            if mime.is_excel:
+                import pandas as pd  # noqa: PLC0415
+                df = pd.read_excel(str(path), nrows=5, dtype=str).fillna("")
+                return df.to_string(index=False)[:max_chars]
+
+        except Exception as exc:
+            log.debug("read_sample_failed", file=path.name, error=str(exc))
         return ""
 
     def _parse_llm_json(self, raw: str) -> dict[str, Any]:

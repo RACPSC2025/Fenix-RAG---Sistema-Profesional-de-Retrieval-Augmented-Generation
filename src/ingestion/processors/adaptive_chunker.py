@@ -34,12 +34,36 @@ log = get_logger(__name__)
 # ─── Separadores por tipo de documento ────────────────────────────────────────
 
 DOCUMENT_SEPARATORS: dict[str, list[str]] = {
-    "decree": [
-        "\n\nARTÍCULO",
-        "\n\nArtículo",
-        "\n\nCAPÍTULO",
-        "\n\nSECCIÓN",
-        "\n\nPARÁGRAFO",
+    "documentation": [
+        "\n## ",
+        "\n### ",
+        "\n#### ",
+        "\n1.",
+        "\n2.",
+        "\n---",
+        "\n\n",
+        "\n",
+        " ",
+        "",
+    ],
+    "api_docs": [
+        "\n## ",
+        "\n### ",
+        "\nEndpoint",
+        "\nResponse",
+        "\nRequest",
+        "\n\n",
+        "\n",
+        " ",
+        "",
+    ],
+    "architecture": [
+        "\n## ",
+        "\n### ",
+        "\n1.",
+        "\n2.",
+        "\nComponent",
+        "\nLayer",
         "\n\n",
         "\n",
         " ",
@@ -51,18 +75,6 @@ DOCUMENT_SEPARATORS: dict[str, list[str]] = {
         "\n\nPARÁGRAFO",
         "\n\nOTROSÍ",
         "\n\nANEXO",
-        "\n\n",
-        "\n",
-        " ",
-        "",
-    ],
-    "manual": [
-        "\n## ",
-        "\n### ",
-        "\n#### ",
-        "\n1.",
-        "\n2.",
-        "\nNota:",
         "\n\n",
         "\n",
         " ",
@@ -96,20 +108,17 @@ def detect_document_type(text: str) -> DocumentTypeResult:
     """
     Detecta el tipo de documento basado en patrones de texto.
 
-    Args:
-        text: Contenido del documento (primeros 2000 chars suficientes).
-
-    Returns:
-        DocumentTypeResult con tipo, confianza e indicadores encontrados.
+    Tipos genéricos para un asistente de desarrollo de propósito general.
     """
     sample = text[:2000].lower()
 
     # Patrones por tipo
     patterns = {
-        "decree": [r"art[íi]culo\s+\d", r"cap[íi]tulo\s+\w", r"par[áa]grafo", r"decreto\s+\d"],
-        "contract": [r"cl[áa]usula\s+\w", r"otros[íi]", r"anexo\s+\w", r"partes\s+contratantes"],
-        "manual": [r"^\s*##\s+\w", r"^\s*###\s+\w", r"^\s*\d+\.\s+\w", r"nota:"],
-        "policy": [r"pol[íi]tica\s+\w", r"procedimiento\s+\w", r"responsable\s+\w", r"alcance\s+\w"],
+        "documentation": [r"function\s+\w", r"class\s+\w", r"def\s+\w", r"returns", r"parameters?\s*:"],
+        "api_docs": [r"endpoint", r"request\s+body", r"response\s+200", r"api\s+key", r"header:"],
+        "architecture": [r"component\s+\w", r"microservice", r"layer\s+\w", r"architecture\s+pattern"],
+        "contract": [r"cl[aá]usula\s+\w", r"the\s+parties\s+agree", r"terms\s+and\s+conditions"],
+        "policy": [r"policy\s+\w", r"procedure\s+\w", r"responsibl\w+\s+shall", r"scope\s+of"],
     }
 
     scores: dict[str, int] = {}
@@ -126,7 +135,7 @@ def detect_document_type(text: str) -> DocumentTypeResult:
 
     if not scores or max(scores.values()) == 0:
         return DocumentTypeResult(
-            doc_type="unknown",
+            doc_type="standard",
             confidence=0.0,
             indicators=[],
         )
@@ -178,7 +187,7 @@ class AdaptiveChunker:
             doc_type = doc_type_result.doc_type
 
             # Obtener separadores del tipo detectado
-            separators = DOCUMENT_SEPARATORS.get(doc_type, DOCUMENT_SEPARATORS["decree"])
+            separators = DOCUMENT_SEPARATORS.get(doc_type, DOCUMENT_SEPARATORS["documentation"])
 
             # Crear splitter con separadores específicos
             splitter = RecursiveCharacterTextSplitter(
