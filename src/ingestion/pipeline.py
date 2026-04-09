@@ -77,6 +77,8 @@ class IngestionPipeline:
         chunk_overlap: int | None = None,
         cleaner_profile: str = "default",
         collection_name: str | None = None,
+        augment_with_questions: bool = False,
+        questions_per_chunk: int = 3,
     ) -> None:
         """
         Args:
@@ -84,6 +86,8 @@ class IngestionPipeline:
             chunk_overlap: Overlap entre chunks (override de settings).
             cleaner_profile: Perfil de limpieza ("default", "legal_colombia", "ocr_output").
             collection_name: Nombre de la colección Chroma (override de settings).
+            augment_with_questions: Si True, genera preguntas por chunk durante ingestión.
+            questions_per_chunk: Número de preguntas por chunk (si augment=True).
         """
         settings = get_settings()
 
@@ -91,6 +95,8 @@ class IngestionPipeline:
         self.chunk_overlap = chunk_overlap or settings.chunk_overlap
         self.cleaner_profile = cleaner_profile
         self.collection_name = collection_name or settings.chroma_collection_name
+        self.augment_with_questions = augment_with_questions
+        self.questions_per_chunk = questions_per_chunk
 
         # Componentes lazy-initialized
         self._registry: Any | None = None
@@ -320,10 +326,33 @@ class IngestionPipeline:
 
         errors: list[str] = []
 
-        try:
-            vs.add_documents(docs)
-        except Exception as exc:
-            errors.append(f"Chroma index error: {str(exc)}")
+        # Augmentar con preguntas si está habilitado
+        if self.augment_with_questions:
+            from src.ingestion.processors.document_augmenter import augment_and_index  # noqa: PLC0415
+            try:
+                stats = augment_and_index(
+                    chunks=docs,
+                    vector_store=vs,
+                    questions_per_chunk=self.questions_per_chunk,
+                )
+                log.info(
+                    "index_with_augmentation",
+                    original=stats["original_chunks"],
+                    questions=stats["questions_added"],
+                    total=stats["total_indexed"],
+                )
+            except Exception as exc:
+                errors.append(f"Augmentation index error: {str(exc)}")
+                # Fallback: indexar sin augmentación
+                try:
+                    vs.add_documents(docs)
+                except Exception as exc2:
+                    errors.append(f"Fallback index error: {str(exc2)}")
+        else:
+            try:
+                vs.add_documents(docs)
+            except Exception as exc:
+                errors.append(f"Chroma index error: {str(exc)}")
 
         return errors
 

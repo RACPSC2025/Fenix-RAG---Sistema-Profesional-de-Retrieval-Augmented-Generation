@@ -126,9 +126,8 @@ def retrieval_node(state: AgentState) -> dict:
 
 
 def generation_node(state: AgentState) -> dict:
-    """Genera respuesta con contexto de retrieval_results."""
-    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage  # noqa: PLC0415
-    from src.config.providers import get_llm  # noqa: PLC0415
+    """Genera respuesta con Rethinking (Re2) — dos pasadas de lectura."""
+    from src.agent.skills.rethinking import generate_with_rethinking  # noqa: PLC0415
 
     query = state.get("active_query") or state.get("user_query", "")
     docs = state.get("retrieval_results", [])
@@ -139,32 +138,10 @@ def generation_node(state: AgentState) -> dict:
             "sources": [],
         }
 
-    context = "\n\n".join(
-        f"[Fuente: {d.metadata.get('source', 'N/A')} | Chunk: {d.metadata.get('chunk_index', '?')}]\n{d.page_content}"
-        for d in docs
-    )
-
-    from src.agent.prompts.system import GENERATION_PROMPT  # noqa: PLC0415
-
-    llm = get_llm()
-    messages = [
-        SystemMessage(content=GENERATION_PROMPT),
-        HumanMessage(content=f"Consulta: {query}\n\nContexto:\n{context}"),
-    ]
-
-    response = llm.invoke(messages)
-
-    # Extraer fuentes de los documentos
-    sources = []
-    for d in docs:
-        sources.append({
-            "source": d.metadata.get("source", ""),
-            "article": d.metadata.get("article_number", ""),
-            "page": str(d.metadata.get("page", "")),
-        })
+    answer, sources = generate_with_rethinking(query, docs)
 
     return {
-        "draft_answer": response.content,
+        "draft_answer": answer,
         "sources": sources,
     }
 

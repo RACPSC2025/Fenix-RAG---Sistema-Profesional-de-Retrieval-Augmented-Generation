@@ -55,6 +55,7 @@ from src.agent.nodes.all_nodes import (
     retrieval_node,
     supervisor_node,
 )
+from src.agent.skills.crag import grade_documents_node, route_after_grading
 from src.agent.state import AgentState, initial_state
 from src.agent.tools.ingest_tools import (
     ingest_excel,
@@ -160,8 +161,17 @@ def build_graph(
     # ── Nodos ─────────────────────────────────────────────────────────────────
     builder.add_node("document_router", document_router_node)
     builder.add_node("ingestion", ingestion_node)
-    builder.add_node("retrieval", retrieval_node)
-    builder.add_node("generation", generation_node)
+    builder.add_node(
+        "retrieval",
+        retrieval_node,
+        retry=3,  # Reintentar hasta 3 veces ante fallos transitorios
+    )
+    builder.add_node("grade", grade_documents_node)
+    builder.add_node(
+        "generation",
+        generation_node,
+        retry=2,
+    )
     builder.add_node("reflection", reflection_node)
     builder.add_node("supervisor", supervisor_node)
 
@@ -171,7 +181,7 @@ def build_graph(
 
     # ── Edges lineales ────────────────────────────────────────────────────────
     builder.add_edge(START, "document_router")
-    builder.add_edge("retrieval", "generation")
+    builder.add_edge("retrieval", "grade")
 
     # ── Edges condicionales ───────────────────────────────────────────────────
     builder.add_conditional_edges(
@@ -202,10 +212,24 @@ def build_graph(
         {"retrieval": "retrieval", END: END},
     )
 
+    # CRAG grading: correct → generation, ambiguous/incorrect → retrieval (retry)
+    builder.add_conditional_edges(
+        "grade",
+        route_after_grading,
+        {"generation": "generation", "retrieval": "retrieval"},
+    )
+
     # ── Compilar ──────────────────────────────────────────────────────────────
     compile_kwargs: dict[str, Any] = {}
     if checkpointer is not None:
         compile_kwargs["checkpointer"] = checkpointer
+
+    # Node caching para evitar re-ejecución de nodos idénticos
+    try:
+        from langgraph.cache.memory import InMemoryCache  # noqa: PLC0415
+        compile_kwargs["cache"] = InMemoryCache()
+    except ImportError:
+        pass  # Cache no disponible — continúa sin ella
 
     graph = builder.compile(**compile_kwargs)
 

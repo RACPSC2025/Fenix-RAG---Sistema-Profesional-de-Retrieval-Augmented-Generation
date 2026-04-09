@@ -27,6 +27,7 @@ from typing import Annotated, Any
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
+from langgraph.managed import RemainingSteps
 from typing_extensions import TypedDict
 
 
@@ -108,6 +109,9 @@ class AgentState(TypedDict):
     # ── Metadata del grafo ────────────────────────────────────────────────────
     error: str | None                    # mensaje de error si algo falla
     route: str                           # próximo nodo ("END", "retrieval", etc.)
+
+    # ── Managed values (LangGraph internal) ──────────────────────────────────
+    remaining_steps: RemainingSteps      # pasos restantes antes del límite de recursión
 
 
 # ─── Estado inicial ───────────────────────────────────────────────────────────
