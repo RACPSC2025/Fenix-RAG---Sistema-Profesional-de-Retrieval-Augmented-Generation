@@ -23,21 +23,22 @@ def reflection_node(state: AgentState) -> dict:
 
     draft = state.get("draft_answer", "")
     query = state.get("user_query", "")
+    docs = state.get("retrieval_results", [])
     iteration = state.get("iteration_count", 0)
     max_iter = state.get("max_iterations", 2)
 
     # Validación rule-based primero (sin costo de LLM)
     validator = AnswerValidatorSkill()
-    validation = validator.validate(draft, query)
+    validation = validator.validate(draft, docs, query)
 
     if validation.is_valid:
         return {
             "final_answer": draft,
             "reflection": ReflectionOutput(
-                score=validation.score,
-                is_grounded=True,
+                score=validation.confidence,
+                is_grounded=validation.is_valid,
                 has_hallucination=False,
-                cites_source=validation.cites_source,
+                cites_source=True,
                 feedback="Respuesta válida",
                 reformulated_query="",
             ),
@@ -47,15 +48,19 @@ def reflection_node(state: AgentState) -> dict:
 
     # Si no es válida y quedan iteraciones → reformular
     if iteration < max_iter:
-        reformulated = validator.suggest_reformulation(query, draft)
+        # Usar query_transformer para reformular
+        from src.agent.skills.query_transformer import QueryTransformer  # noqa: PLC0415
+        transformer = QueryTransformer()
+        reformulated = transformer.rewrite(query)
+
         return {
             "active_query": reformulated,
             "reflection": ReflectionOutput(
-                score=validation.score,
+                score=validation.confidence,
                 is_grounded=False,
-                has_hallucination=validation.has_hallucination,
-                cites_source=validation.cites_source,
-                feedback=validation.feedback,
+                has_hallucination=bool(validation.violations),
+                cites_source=False,
+                feedback=validation.violations[0] if validation.violations else "Respuesta inválida",
                 reformulated_query=reformulated,
             ),
             "route": "retrieval",
@@ -66,10 +71,10 @@ def reflection_node(state: AgentState) -> dict:
     return {
         "final_answer": draft + "\n\n⚠️ Nota: Esta respuesta puede estar incompleta.",
         "reflection": ReflectionOutput(
-            score=validation.score,
+            score=validation.confidence,
             is_grounded=False,
             has_hallucination=False,
-            cites_source=validation.cites_source,
+            cites_source=False,
             feedback="Iteraciones agotadas",
             reformulated_query="",
         ),
