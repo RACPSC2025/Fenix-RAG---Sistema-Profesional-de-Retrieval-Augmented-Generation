@@ -25,6 +25,14 @@
       "index_file": "INDEX.md",
       "priority": 80,
       "tags": ["backend", "python", "fastapi", "async"]
+    },
+    "django-ai-engineer": {
+      "name": "Django AI Engineer",
+      "description": "Python 3.12 + Django async + LangGraph + RAG + MCP + Cloud. Perfil dual: asistir a seniors en producción y enseñar a juniors durante el proceso.",
+      "path": "django-ai-engineer/",
+      "index_file": "INDEX.md",
+      "priority": 70,
+      "tags": ["django", "async", "langgraph", "rag", "mcp", "aws", "production", "mentoring"]
     }
   },
   "fallback": {
