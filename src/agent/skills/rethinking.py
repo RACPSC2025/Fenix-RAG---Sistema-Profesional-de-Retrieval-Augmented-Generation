@@ -65,7 +65,7 @@ ANSWER_GENERATION_PROMPT = SystemMessage(
 )
 
 
-# ─── Función principal ───────────────────────────────────────────────────────
+# ─── Función principal — Re2 (dos pasadas) ────────────────────────────────────
 
 def generate_with_rethinking(
     query: str,
@@ -126,6 +126,58 @@ def generate_with_rethinking(
     )
 
     return final_answer, sources
+
+
+# ─── Función directa — Single Pass (una pasada) ──────────────────────────────
+
+DIRECT_GENERATION_PROMPT = SystemMessage(
+    content=(
+        "Eres un asistente experto y preciso.\n\n"
+        "REGLAS ESTRICTAS:\n"
+        "1. Responde ÚNICAMENTE basándote en los documentos proporcionados.\n"
+        "2. SIEMPRE cita la fuente exacta de donde obtienes la información.\n"
+        "3. Si la información NO está en el contexto, indícalo explícitamente.\n"
+        "4. NUNCA inventes o extrapoles más allá del texto.\n"
+        "5. Si hay ambigüedad, indica las distintas interpretaciones posibles.\n\n"
+        "FORMATO DE RESPUESTA:\n"
+        "- Respuesta directa y concisa\n"
+        "- Cita textual o parafraseada con fuente\n"
+        "- Advertencia de limitaciones si aplica"
+    )
+)
+
+
+def generate_direct(
+    query: str,
+    documents: list[Document],
+    llm: Any | None = None,
+) -> tuple[str, list[dict[str, str]]]:
+    """
+    Genera respuesta en una sola pasada (sin Re2).
+
+    Usar cuando los documentos son claramente relevantes (CRAG score > 0.8).
+    Ahorra 1 llamada LLM vs generate_with_rethinking.
+
+    Args:
+        query: Consulta del usuario.
+        documents: Documentos recuperados para el contexto.
+        llm: LLM instance. None = usa el default.
+
+    Returns:
+        Tuple de (respuesta, fuentes).
+    """
+    llm = llm or get_llm(temperature=0)
+
+    context = _build_context(documents)
+
+    response = llm.invoke([
+        DIRECT_GENERATION_PROMPT,
+        HumanMessage(content=f"Consulta: {query}\n\nContexto:\n{context}"),
+    ])
+
+    sources = _extract_sources(response.content, documents)
+
+    return response.content.strip(), sources
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
