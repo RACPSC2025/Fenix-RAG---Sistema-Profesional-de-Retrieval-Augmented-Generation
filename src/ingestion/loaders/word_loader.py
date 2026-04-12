@@ -63,7 +63,7 @@ class WordLoader(BaseLoader):
         self,
         chunk_size: int | None = None,
         chunk_overlap: int | None = None,
-        cleaner_profile: str = "legal_colombia",
+        cleaner_profile: str = "default",
         include_tables: bool = True,
         include_headers_footers: bool = False,
     ) -> None:

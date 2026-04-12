@@ -49,7 +49,7 @@ class PyMuPDFLoader(BaseLoader):
         chunk_size: int | None = None,
         chunk_overlap: int | None = None,
         max_pages: int = 400,
-        cleaner_profile: str = "legal_colombia",
+        cleaner_profile: str = "default",
     ) -> None:
         """
         Args:

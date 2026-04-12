@@ -1,20 +1,20 @@
 """
-Chunker semántico para documentos legales colombianos.
+Chunker semántico y jerárquico para documentos estructurados.
 
 Problema con RecursiveCharacterTextSplitter estándar:
-  Corta artículos a la mitad. Un artículo del Decreto 1072 puede tener
-  3.000 caracteres (con sus parágrafos y numerales) pero el splitter
-  estándar los parte en el punto más cercano al límite, destruyendo
-  la coherencia semántica que necesita el LLM para responder con precisión.
+  Corta bloques lógicos a la mitad. Una sección entera puede tener
+  3.000 caracteres pero el splitter estándar la parte en el punto
+  más cercano al límite, destruyendo la coherencia semántica que necesita
+  el LLM para responder con precisión.
 
 Estrategia:
-  1. Segmentación semántica: detectar límites naturales (artículo, capítulo, parágrafo)
+  1. Segmentación semántica: detectar límites naturales (Secciones, Encabezados, Capítulos)
   2. Si el segmento cabe en chunk_size → chunk completo
-  3. Si el segmento es muy grande → sub-chunking con overlap respetando parágrafos
+  3. Si el segmento es muy grande → sub-chunking con overlap respetando párrafos
   4. Si el segmento es muy pequeño → merge con el siguiente hasta llenar el chunk
 
 Separadores por prioridad (de mayor a menor):
-  ARTÍCULO > CAPÍTULO > SECCIÓN > PARÁGRAFO > doble salto > salto simple > espacio
+  H1 > H2 > H3 > CAPÍTULO > SECCIÓN > doble salto > salto simple > espacio
 """
 
 from __future__ import annotations
@@ -40,16 +40,17 @@ log = get_logger(__name__)
 
 # Orden: de mayor semántica a menor. El splitter intenta el primero;
 # si el segmento sigue siendo muy grande, intenta el siguiente.
-LEGAL_SEPARATORS: list[str] = [
-    "\nARTÍCULO ",
-    "\nArtículo ",
+HIERARCHICAL_SEPARATORS: list[str] = [
+    "\n# ",
+    "\n## ",
+    "\n### ",
     "\nCAPÍTULO ",
     "\nSECCIÓN ",
-    "\nPARÁGRAFO ",
     "\n\n\n",
     "\n\n",
     "\n",
     " ",
+    "",
 ]
 
 
@@ -72,18 +73,18 @@ class ChunkConfig:
     add_header: bool = True
     source_path: Path | None = None
     loader_type: str = ""
-    cleaner_profile: str = "legal_colombia"
+    cleaner_profile: str = "default"
 
 
 # ─── Chunker ──────────────────────────────────────────────────────────────────
 
-class LegalChunker:
+class HierarchicalChunker:
     """
-    Chunker semántico optimizado para normativa legal colombiana.
+    Chunker semántico optimizado para documentos jerárquicos corporativos y técnicos.
 
-    Preserva artículos completos dentro del límite de chunk_size.
-    Cuando un artículo supera el límite, lo sub-divide respetando
-    la estructura interna (parágrafos, numerales).
+    Preserva secciones completas dentro del límite de chunk_size.
+    Cuando una sección supera el límite, la sub-divide respetando
+    la estructura interna (párrafos, numerales).
     """
 
     def __init__(
@@ -99,7 +100,7 @@ class LegalChunker:
 
         # Splitter de respaldo para segmentos demasiado grandes
         self._splitter = RecursiveCharacterTextSplitter(
-            separators=LEGAL_SEPARATORS,
+            separators=HIERARCHICAL_SEPARATORS,
             chunk_size=self.chunk_size,
             chunk_overlap=self.chunk_overlap,
             length_function=len,
@@ -127,9 +128,9 @@ class LegalChunker:
         )
 
         # 1. Segmentar por límites semánticos (artículos, capítulos)
-        segments = self._segment_by_articles(text)
+        segments = self._segment_by_headers(text)
         log.debug(
-            "legal_segments_found",
+            "hierarchical_segments_found",
             count=len(segments),
             source=cfg.source_path.name if cfg.source_path else "unknown",
         )
@@ -185,20 +186,19 @@ class LegalChunker:
 
         return documents
 
-    def _segment_by_articles(self, text: str) -> list[str]:
+    def _segment_by_headers(self, text: str) -> list[str]:
         """
-        Divide el texto en segmentos por marcadores de artículos/capítulos.
+        Divide el texto en segmentos por marcadores de encabezados principales.
 
         Estrategia:
-          1. Buscar todas las posiciones donde empieza un ARTÍCULO o CAPÍTULO
+          1. Buscar todas las posiciones donde empieza una sección (Markdown o Genérica)
           2. Usar esas posiciones como límites de segmento
           3. El texto entre marcadores es un segmento
 
-        Esto garantiza que un artículo nunca se parte entre dos segmentos.
+        Esto garantiza que una sección nunca se parte de manera destructiva.
         """
-        # Patrón que detecta inicio de unidades semánticas principales
         boundary_pattern = re.compile(
-            r"(?=\n(?:ARTÍCULO|Artículo|CAPÍTULO|SECCIÓN)\s)",
+            r"(?=\n(?:#+\s|CAPÍTULO|SECCIÓN|PARTE)\b)",
             re.IGNORECASE,
         )
 
@@ -212,7 +212,7 @@ class LegalChunker:
         text: str,
         source_path: Path | None = None,
         loader_type: str = "",
-        cleaner_profile: str = "legal_colombia",
+        cleaner_profile: str = "default",
         add_header: bool = True,
     ) -> list[Document]:
         """
@@ -239,11 +239,11 @@ class LegalChunker:
 
 # ─── Instancia por defecto ────────────────────────────────────────────────────
 
-_default_chunker: LegalChunker | None = None
+_default_chunker: HierarchicalChunker | None = None
 
 
-def get_legal_chunker() -> LegalChunker:
+def get_hierarchical_chunker() -> HierarchicalChunker:
     global _default_chunker  # noqa: PLW0603
     if _default_chunker is None:
-        _default_chunker = LegalChunker()
+        _default_chunker = HierarchicalChunker()
     return _default_chunker

@@ -162,16 +162,17 @@ class AdaptiveChunker:
     """
 
     @classmethod
-    def chunk(cls, documents: list[Document], chunk_size: int | None = None, chunk_overlap: int | None = None) -> list[Document]:
+    def chunk(cls, documents: list[Document], chunk_size: int | None = None, chunk_overlap: int | None = None, document_type: str | None = None) -> list[Document]:
         """
         Chunking adaptativo para una lista de documentos.
 
-        Cada documento se chunka con sus propios separadores según su tipo detectado.
+        Cada documento se chunka con sus propios separadores según su tipo.
 
         Args:
             documents: Documentos a chunkar.
             chunk_size: Override del tamaño de chunk.
             chunk_overlap: Override del overlap.
+            document_type: Tipo de documento (evita re-detección).
 
         Returns:
             Lista de documentos chunkeados.
@@ -183,8 +184,17 @@ class AdaptiveChunker:
         all_chunks: list[Document] = []
 
         for doc in documents:
-            doc_type_result = detect_document_type(doc.page_content)
-            doc_type = doc_type_result.doc_type
+            # Usar tipo pre-detectado, de metadatos, o ejecutar detección como fallback
+            if document_type:
+                doc_type = document_type
+                confidence = 1.0
+            elif "document_type" in doc.metadata:
+                doc_type = doc.metadata["document_type"]
+                confidence = 1.0
+            else:
+                doc_type_result = detect_document_type(doc.page_content)
+                doc_type = doc_type_result.doc_type
+                confidence = doc_type_result.confidence
 
             # Obtener separadores del tipo detectado
             separators = DOCUMENT_SEPARATORS.get(doc_type, DOCUMENT_SEPARATORS["documentation"])
@@ -208,7 +218,7 @@ class AdaptiveChunker:
                         **doc.metadata,
                         "document_type": doc_type,
                         "chunk_index": i,
-                        "chunking_confidence": doc_type_result.confidence,
+                        "chunking_confidence": confidence,
                     },
                 ))
 
@@ -217,7 +227,7 @@ class AdaptiveChunker:
                 source=doc.metadata.get("source", "?"),
                 doc_type=doc_type,
                 chunks=len(chunks),
-                confidence=doc_type_result.confidence,
+                confidence=confidence,
             )
 
         log.info(

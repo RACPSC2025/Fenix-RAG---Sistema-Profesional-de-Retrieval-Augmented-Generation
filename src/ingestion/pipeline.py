@@ -98,21 +98,31 @@ class IngestionPipeline:
         self.augment_with_questions = augment_with_questions
         self.questions_per_chunk = questions_per_chunk
 
+        # Document type from IngestionPlan (propagated to chunker)
+        self.document_type: str | None = None
+
         # Componentes lazy-initialized
         self._registry: Any | None = None
         self._vector_store: Any | None = None
 
-    def ingest_file(self, file_path: str | Path) -> PipelineResult:
+    def ingest_file(self, plan: dict) -> PipelineResult:
         """
         Procesa un archivo completo a través del pipeline.
 
         Args:
-            file_path: Path absoluto al archivo.
+            plan: IngestionPlan (dict) con la metadata extraida por el classifier.
 
         Returns:
             PipelineResult con chunks, metadatos y errores.
         """
-        source = Path(file_path)
+        source = Path(plan.get("source_path", ""))
+        self.document_type = plan.get("document_type", "unknown")
+        self.cleaner_profile = plan.get("cleaner_profile", "default")
+        
+        # Obtenemos las detecciones provenientes del plan pre-clasificado
+        mime_type = plan.get("mime_type", "application/octet-stream")
+        confidence = plan.get("confidence", 1.0)
+        loader_name = plan.get("loader_type")
 
         if not source.exists():
             return PipelineResult(
@@ -126,17 +136,27 @@ class IngestionPipeline:
         result = PipelineResult(source_path=source, success=False)
 
         try:
-            # Etapa 1: Detect MIME type
-            result.mime_type = self._detect_mime_type(source)
-            log.debug("pipeline_mime_detected", mime=result.mime_type)
+            result.mime_type = mime_type
+            log.debug("pipeline_using_plan_mime", mime=result.mime_type)
 
-            # Etapa 2: Detect PDF quality (si aplica)
-            quality_info = self._detect_quality(source, result.mime_type)
+            # Ya no inferimos ni mimetype ni quality, y apuntamos al loader sugerido.
+            if self._registry is None:
+                from src.ingestion.registry import LoaderRegistry
+                self._registry = LoaderRegistry() # Default instances 
+            
+            # Etapa 3: Instanciar loader
+            # Asumimos que loader_name existe, de lo contrario usamos _select_loader para re-detectar
+            if loader_name and hasattr(self._registry, "get_loader"):
+                loader = self._registry.get_loader(loader_name)
+            else:
+                 # Fallback: re-detección (sólo debería activarse si falló extraer un plan válido)
+                 loader = self._select_loader(source, result.mime_type, {"confidence": confidence})
+                 
+            if not loader:
+                 raise ValueError(f"No se pudo inicializar un loader válido para {loader_name}")
 
-            # Etapa 3: Select optimal loader
-            loader = self._select_loader(source, result.mime_type, quality_info)
             result.loader_used = type(loader).__name__
-            result.classifier_confidence = quality_info.get("confidence", 1.0)
+            result.classifier_confidence = confidence
 
             log.info(
                 "pipeline_loader_selected",
@@ -146,7 +166,7 @@ class IngestionPipeline:
 
             # Etapa 4: Load document
             loaded_docs = self._load(source, loader)
-            result.page_count = quality_info.get("page_count", 0)
+            result.page_count = len(loaded_docs)
 
             log.debug(
                 "pipeline_loaded",
@@ -174,7 +194,7 @@ class IngestionPipeline:
             result.errors = index_errors
             result.success = len(enriched_docs) > 0
             result.pages_processed = result.page_count
-            result.document_type = quality_info.get("document_type", "unknown")
+            result.document_type = self.document_type
 
             log.info(
                 "pipeline_complete",
@@ -288,16 +308,16 @@ class IngestionPipeline:
     # ── Etapa 6: Chunk ────────────────────────────────────────────────────────
 
     def _chunk(self, docs: list[Document]) -> list[Document]:
-        """Aplica chunking jerárquico preservando estructura del documento."""
-        from src.ingestion.processors.legal_chunker import LegalChunker  # noqa: PLC0415
+        """Aplica chunking adaptativo preservando estructura del documento."""
+        from src.ingestion.processors.adaptive_chunker import AdaptiveChunker  # noqa: PLC0415
 
-        chunker = LegalChunker(
+        # Usar AdaptiveChunker con document_type propagado del IngestionPlan
+        return AdaptiveChunker.chunk(
+            docs,
             chunk_size=self.chunk_size,
             chunk_overlap=self.chunk_overlap,
+            document_type=self.document_type,
         )
-
-        chunked = chunker.chunk(docs)
-        return chunked
 
     # ── Etapa 7: Metadata Extraction ──────────────────────────────────────────
 

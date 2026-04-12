@@ -200,6 +200,13 @@ class LoaderRegistry:
             for e in self._entries
         ]
 
+    def get_loader(self, loader_type: str) -> BaseLoader | None:
+        """Retorna instancia fresca del loader solicitado, si existe."""
+        for entry in self._entries:
+            if entry.loader_type == loader_type:
+                return entry.loader_factory()
+        return None
+
     def __repr__(self) -> str:
         types = [e.loader_type for e in self._entries]
         return f"LoaderRegistry(loaders={types})"
