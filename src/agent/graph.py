@@ -186,8 +186,26 @@ def build_graph(
     builder.add_node("supervisor", supervisor_node)
 
     if with_tools:
-        tool_node = ToolNode(tools=ALL_TOOLS)
-        builder.add_node("tools", tool_node)
+        from src.agent.tools.memory_tools import get_memory_store
+
+        _tool_node = ToolNode(tools=ALL_TOOLS)
+
+        def wrapped_tool_node(state: AgentState):
+            # Sync inicial: in-memory store carga estado inyectado
+            store = get_memory_store()
+            session_id = state.get("session_id", "default")
+            store.sync_from_state(session_id, state.get("session_memory", {}))
+            
+            # Ejecutar herramientas usando instancia reutilizada (pueden mutar el store)
+            result = _tool_node.invoke(state)
+            
+            # Sync final: persistir hacia el estado del agente
+            updated_memory = store.sync_to_state(session_id)
+            if isinstance(result, dict):
+                result["session_memory"] = updated_memory
+            return result
+
+        builder.add_node("tools", wrapped_tool_node)
 
     # ── Edges lineales ────────────────────────────────────────────────────────
     builder.add_edge(START, "document_router")
