@@ -21,12 +21,12 @@
 
 | Metric | Value |
 |--------|-------|
-| **Overall Progress** | ~57% |
-| **Phases Completed** | 7 of 14 |
+| **Overall Progress** | ~65% |
+| **Phases Completed** | 9 of 14 |
 | **Fixes Applied** | 7 of 7 |
-| **Test Files** | 23+ |
+| **Test Files** | 26 (23 unit + 3 integration) |
 | **Skill Packs** | 4 (general-dev, ai-rag-engineer, backend-python, django-ai-engineer) |
-| **Estimated Time Remaining** | ~25 weeks |
+| **Estimated Time Remaining** | ~22 weeks |
 | **Target Release** | Q3 2026 |
 
 For full progress details, see [`docs/super_agent_architecture.md`](docs/super_agent_architecture.md) and [`docs/action-plan.md`](docs/action-plan.md).
@@ -225,7 +225,7 @@ racodex/
 │   ├── persistence/              # PostgreSQL + SQLAlchemy async
 │   ├── api/                      # FastAPI REST API
 │   └── mcp/                      # Model Context Protocol
-├── tests/                        # Unit + integration tests (23+ files)
+├── tests/                        # Unit + integration tests (26 files)
 ├── agent_skills/                 # Skill Packs (modular agent knowledge)
 │   ├── registry.json             # Profile registry (4 packs)
 │   ├── general-dev/              # Base fallback profile
@@ -293,12 +293,12 @@ MIT — Free to use, modify, and distribute. The community is welcome.
 
 | Métrica | Valor |
 |---------|-------|
-| **Progreso general** | ~57% |
-| **Fases completadas** | 7 de 14 |
+| **Progreso general** | ~65% |
+| **Fases completadas** | 9 de 14 |
 | **Fixes aplicados** | 7 de 7 |
-| **Archivos de tests** | 23+ |
+| **Archivos de tests** | 26 (23 unit + 3 integration) |
 | **Skill Packs** | 4 (general-dev, ai-rag-engineer, backend-python, django-ai-engineer) |
-| **Tiempo estimado restante** | ~25 semanas |
+| **Tiempo estimado restante** | ~22 semanas |
 | **Release objetivo** | Q3 2026 |
 
 Para detalles completos del progreso, consulta [`docs/super_agent_architecture.md`](docs/super_agent_architecture.md) y [`docs/action-plan.md`](docs/action-plan.md).
@@ -492,12 +492,12 @@ racodex/
 │   │   ├── tools/                # 12 tools (ingest, search, memory)
 │   │   ├── skills/               # 8 skills + SkillRegistry
 │   │   └── prompts/              # System prompts por rol
-│   ├── ingestion/                # Pipeline de ingestión (document_type propagation, batching LLM)
+│   ├── ingestion/                # Pipeline (document_type propagation, LLM batching)
 │   ├── retrieval/                # 6 estrategias de retrieval + ensemble
 │   ├── persistence/              # PostgreSQL + SQLAlchemy async
 │   ├── api/                      # FastAPI REST API
 │   └── mcp/                      # Model Context Protocol
-├── tests/                        # Tests unitarios e integración (23+ archivos)
+├── tests/                        # Tests unitarios e integración (26 archivos)
 ├── agent_skills/                 # Skill Packs (conocimiento modular del agente)
 │   ├── registry.json             # Registro de perfiles (4 packs)
 │   ├── general-dev/              # Perfil base fallback
