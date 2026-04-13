@@ -10,13 +10,20 @@ Flujo de dos lecturas:
 Beneficio: mejora la precisión en respuestas que requieren conectar
 información dispersa en múltiples documentos.
 
-Uso:
-    from src.agent.skills.rethinking import generate_with_rethinking
+Fase 10 — extra_system:
+  Ambas funciones aceptan `extra_system: SystemMessage | None` para inyectar
+  el INDEX.md del skill pack activo. Si está presente, se prepende a los
+  mensajes ANTES del prompt base — el pack establece rol/especialización
+  primero, las reglas anti-alucinación vienen después y no se sobreescriben.
 
-    answer, sources = generate_with_rethinking(
-        query="¿Cuáles son los requisitos del sistema de gestión?",
-        documents=retrieved_docs,
-    )
+Uso:
+    from src.agent.skills.rethinking import generate_with_rethinking, generate_direct
+
+    # Re2 condicional (grade_score 0.5-0.8)
+    answer, sources = generate_with_rethinking(query, docs, extra_system=pack_msg)
+
+    # Directo (grade_score > 0.8)
+    answer, sources = generate_direct(query, docs, extra_system=pack_msg)
 """
 
 from __future__ import annotations
@@ -25,7 +32,7 @@ import re
 from typing import Any
 
 from langchain_core.documents import Document
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from src.config.logging import get_logger
 from src.config.providers import get_llm
@@ -33,7 +40,7 @@ from src.config.providers import get_llm
 log = get_logger(__name__)
 
 
-# ─── Prompts ─────────────────────────────────────────────────────────────────
+# ─── Prompts base ─────────────────────────────────────────────────────────────
 
 PASSAGE_IDENTIFICATION_PROMPT = SystemMessage(
     content=(
@@ -48,7 +55,9 @@ PASSAGE_IDENTIFICATION_PROMPT = SystemMessage(
     )
 )
 
-ANSWER_GENERATION_PROMPT = SystemMessage(
+# Prompt base de generación — reutilizado tanto en Re2 (pass 2) como en direct.
+# Las reglas anti-alucinación NUNCA deben ser sobreescritas por el skill pack.
+GENERATION_PROMPT = SystemMessage(
     content=(
         "Eres un asistente experto y preciso.\n\n"
         "REGLAS ESTRICTAS:\n"
@@ -63,121 +72,6 @@ ANSWER_GENERATION_PROMPT = SystemMessage(
         "- Advertencia de limitaciones si aplica"
     )
 )
-
-
-# ─── Función principal — Re2 (dos pasadas) ────────────────────────────────────
-
-def generate_with_rethinking(
-    query: str,
-    documents: list[Document],
-    llm: Any | None = None,
-) -> tuple[str, list[dict[str, str]]]:
-    """
-    Genera respuesta con Re-Reading de dos pasadas.
-
-    Args:
-        query: Consulta del usuario.
-        documents: Documentos recuperados para el contexto.
-        llm: LLM instance. None = usa el default de providers.
-
-    Returns:
-        Tuple de (respuesta_final, lista_de_fuentes).
-    """
-    if not documents:
-        return "No se encontraron documentos relevantes para esta consulta.", []
-
-    llm = llm or get_llm(temperature=0)
-
-    # Construir contexto completo
-    context = _build_context(documents)
-
-    # ── Primera lectura: identificar pasajes clave ────────────────────────
-    passage_response = llm.invoke([
-        PASSAGE_IDENTIFICATION_PROMPT,
-        HumanMessage(content=f"Consulta: {query}\n\nContexto:\n{context}"),
-    ])
-    key_passages = passage_response.content.strip()
-
-    log.debug(
-        "rethinking_pass1_complete",
-        passages_len=len(key_passages),
-        docs_count=len(documents),
-    )
-
-    # ── Segunda lectura: generar respuesta final ──────────────────────────
-    answer_response = llm.invoke([
-        ANSWER_GENERATION_PROMPT,
-        HumanMessage(content=(
-            f"Consulta: {query}\n\n"
-            f"Pasajes relevantes identificados:\n{key_passages}\n\n"
-            f"Contexto completo de referencia:\n{context}"
-        )),
-    ])
-    final_answer = answer_response.content.strip()
-
-    # Extraer fuentes mencionadas en la respuesta
-    sources = _extract_sources(final_answer, documents)
-
-    log.info(
-        "rethinking_generation_complete",
-        query=query[:60],
-        answer_len=len(final_answer),
-        sources_count=len(sources),
-    )
-
-    return final_answer, sources
-
-
-# ─── Función directa — Single Pass (una pasada) ──────────────────────────────
-
-DIRECT_GENERATION_PROMPT = SystemMessage(
-    content=(
-        "Eres un asistente experto y preciso.\n\n"
-        "REGLAS ESTRICTAS:\n"
-        "1. Responde ÚNICAMENTE basándote en los documentos proporcionados.\n"
-        "2. SIEMPRE cita la fuente exacta de donde obtienes la información.\n"
-        "3. Si la información NO está en el contexto, indícalo explícitamente.\n"
-        "4. NUNCA inventes o extrapoles más allá del texto.\n"
-        "5. Si hay ambigüedad, indica las distintas interpretaciones posibles.\n\n"
-        "FORMATO DE RESPUESTA:\n"
-        "- Respuesta directa y concisa\n"
-        "- Cita textual o parafraseada con fuente\n"
-        "- Advertencia de limitaciones si aplica"
-    )
-)
-
-
-def generate_direct(
-    query: str,
-    documents: list[Document],
-    llm: Any | None = None,
-) -> tuple[str, list[dict[str, str]]]:
-    """
-    Genera respuesta en una sola pasada (sin Re2).
-
-    Usar cuando los documentos son claramente relevantes (CRAG score > 0.8).
-    Ahorra 1 llamada LLM vs generate_with_rethinking.
-
-    Args:
-        query: Consulta del usuario.
-        documents: Documentos recuperados para el contexto.
-        llm: LLM instance. None = usa el default.
-
-    Returns:
-        Tuple de (respuesta, fuentes).
-    """
-    llm = llm or get_llm(temperature=0)
-
-    context = _build_context(documents)
-
-    response = llm.invoke([
-        DIRECT_GENERATION_PROMPT,
-        HumanMessage(content=f"Consulta: {query}\n\nContexto:\n{context}"),
-    ])
-
-    sources = _extract_sources(response.content, documents)
-
-    return response.content.strip(), sources
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -249,17 +143,136 @@ def _extract_sources(
     return sources
 
 
-# ─── Integración con nodo del grafo ──────────────────────────────────────────
+# ─── Función principal — Re2 (dos pasadas) ────────────────────────────────────
+
+def generate_with_rethinking(
+    query: str,
+    documents: list[Document],
+    llm: Any | None = None,
+    extra_system: SystemMessage | None = None,
+) -> tuple[str, list[dict[str, str]]]:
+    """
+    Genera respuesta con Re-Reading de dos pasadas.
+
+    Args:
+        query: Consulta del usuario.
+        documents: Documentos recuperados para el contexto.
+        llm: LLM instance. None = usa el default de providers.
+        extra_system: SystemMessage opcional con el INDEX.md del skill pack activo.
+                      Si está presente, se prepende a los mensajes ANTES del prompt
+                      base — el pack establece rol, las reglas anti-alucinación vienen
+                      después y no pueden ser sobreescritas.
+
+    Returns:
+        Tuple de (respuesta_final, lista_de_fuentes).
+    """
+    if not documents:
+        return "No se encontraron documentos relevantes para esta consulta.", []
+
+    llm = llm or get_llm(temperature=0)
+    context = _build_context(documents)
+
+    # ── Primera lectura: identificar pasajes clave ────────────────────────
+    pass1_messages: list[BaseMessage] = []
+    if extra_system:
+        pass1_messages.append(extra_system)
+    pass1_messages.append(PASSAGE_IDENTIFICATION_PROMPT)
+    pass1_messages.append(
+        HumanMessage(content=f"Consulta: {query}\n\nContexto:\n{context}")
+    )
+
+    passage_response = llm.invoke(pass1_messages)
+    key_passages = passage_response.content.strip()
+
+    log.debug(
+        "rethinking_pass1_complete",
+        passages_len=len(key_passages),
+        docs_count=len(documents),
+        pack_injected=extra_system is not None,
+    )
+
+    # ── Segunda lectura: generar respuesta final ──────────────────────────
+    pass2_messages: list[BaseMessage] = []
+    if extra_system:
+        pass2_messages.append(extra_system)
+    pass2_messages.append(GENERATION_PROMPT)
+    pass2_messages.append(HumanMessage(content=(
+        f"Consulta: {query}\n\n"
+        f"Pasajes relevantes identificados:\n{key_passages}\n\n"
+        f"Contexto completo de referencia:\n{context}"
+    )))
+
+    answer_response = llm.invoke(pass2_messages)
+    final_answer = answer_response.content.strip()
+
+    sources = _extract_sources(final_answer, documents)
+
+    log.info(
+        "rethinking_generation_complete",
+        query=query[:60],
+        answer_len=len(final_answer),
+        sources_count=len(sources),
+        pack_injected=extra_system is not None,
+    )
+
+    return final_answer, sources
+
+
+# ─── Función directa — Single Pass (una pasada) ──────────────────────────────
+
+def generate_direct(
+    query: str,
+    documents: list[Document],
+    llm: Any | None = None,
+    extra_system: SystemMessage | None = None,
+) -> tuple[str, list[dict[str, str]]]:
+    """
+    Genera respuesta en una sola pasada (sin Re2).
+
+    Usar cuando los documentos son claramente relevantes (CRAG score > 0.8).
+    Ahorra 1 llamada LLM vs generate_with_rethinking.
+
+    Args:
+        query: Consulta del usuario.
+        documents: Documentos recuperados para el contexto.
+        llm: LLM instance. None = usa el default.
+        extra_system: SystemMessage opcional con el INDEX.md del skill pack activo.
+
+    Returns:
+        Tuple de (respuesta, fuentes).
+    """
+    llm = llm or get_llm(temperature=0)
+    context = _build_context(documents)
+
+    messages: list[BaseMessage] = []
+    if extra_system:
+        messages.append(extra_system)
+    messages.append(GENERATION_PROMPT)
+    messages.append(
+        HumanMessage(content=f"Consulta: {query}\n\nContexto:\n{context}")
+    )
+
+    response = llm.invoke(messages)
+    sources = _extract_sources(response.content, documents)
+
+    log.info(
+        "direct_generation_complete",
+        query=query[:60],
+        answer_len=len(response.content),
+        sources_count=len(sources),
+        pack_injected=extra_system is not None,
+    )
+
+    return response.content.strip(), sources
+
+
+# ─── Integración con nodo del grafo (legacy) ─────────────────────────────────
 
 def rethinking_generation_node(state: dict) -> dict:
     """
     Nodo de generación con Rethinking para el grafo LangGraph.
-
-    Args:
-        state: AgentState con user_query, retrieval_results.
-
-    Returns:
-        Dict con draft_answer, sources.
+    Mantenido para compatibilidad. El generation_node principal
+    usa generate_direct y generate_with_rethinking directamente.
     """
     query = state.get("active_query") or state.get("user_query", "")
     docs = state.get("retrieval_results", [])
