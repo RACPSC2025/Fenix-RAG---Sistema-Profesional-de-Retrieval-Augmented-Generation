@@ -54,6 +54,7 @@ Herramientas disponibles (via wrapped_tool_node con sync memory):
   - semantic_search, hybrid_search, article_lookup
   - list_indexed_documents
   - save_context, retrieve_context, list_context_keys, clear_context
+  - load_skill, search_skills, list_available_profiles [Fase 10]
 """
 
 from __future__ import annotations
@@ -91,23 +92,35 @@ from src.agent.tools.search_tools import (
     hybrid_search,
     semantic_search,
 )
+from src.agent.tools.skill_tools import (
+    list_available_profiles,
+    load_skill,
+    search_skills,
+)
 from src.config.logging import get_logger
 
 log = get_logger(__name__)
 
 ALL_TOOLS = [
+    # Ingestion tools (5)
     ingest_pdf,
     ingest_excel,
     ingest_word,
     ingest_image_pdf,
     list_indexed_documents,
+    # Search tools (3)
     semantic_search,
     hybrid_search,
     article_lookup,
+    # Memory tools (4)
     save_context,
     retrieve_context,
     list_context_keys,
     clear_context,
+    # Skill tools (3) — Fase 10
+    load_skill,
+    search_skills,
+    list_available_profiles,
 ]
 
 
