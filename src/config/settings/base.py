@@ -92,6 +92,12 @@ class BaseSettings(BaseSettings):
     api_port: int = 8000
     api_workers: int = 1
 
+    # ── Feature Flags ────────────────────────────────────────────────────────
+
+    enable_context_window_manager: bool = True
+    enable_token_optimization: bool = True
+    enable_document_type_propagation: bool = True
+
     # ─── Propiedades computadas ───────────────────────────────────────────────
 
     @property
