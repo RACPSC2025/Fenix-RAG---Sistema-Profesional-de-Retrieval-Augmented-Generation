@@ -100,6 +100,10 @@ class AgentState(TypedDict):
     user_query: str             # query original del usuario (sin modificar)
     active_query: str           # query actual (puede ser reformulada)
 
+    # ── Skill Pack activo [Fase 10] ───────────────────────────────────────────
+    active_profile: str         # nombre del pack activo ("general-dev", etc.)
+                                # "" → generation_node usa default del registry
+
     # ── Documentos del usuario ────────────────────────────────────────────────
     uploaded_files: list[str]
     ingestion_plans: list[IngestionPlan]
@@ -148,6 +152,7 @@ def initial_state(
     session_id: str = "",
     uploaded_files: list[str] | None = None,
     max_iterations: int = 2,
+    active_profile: str = "",
 ) -> dict[str, Any]:
     """
     Construye el estado inicial para una nueva invocación del agente.
@@ -157,6 +162,10 @@ def initial_state(
         session_id: ID de sesión para trazabilidad.
         uploaded_files: Paths a archivos que el usuario quiere consultar.
         max_iterations: Máximo de ciclos reflection → re-retrieval.
+        active_profile: Skill pack a usar. "" → generation_node resuelve
+                        con el default del SkillRegistry ("general-dev").
+                        La API puede pasar el perfil explícito si el usuario
+                        lo seleccionó en el frontend (Fase 11).
 
     Returns:
         Dict compatible con AgentState para pasar a graph.invoke().
@@ -182,6 +191,8 @@ def initial_state(
         "session_memory": {},
         "error": None,
         "route": "",
+        # Skill Pack [Fase 10]
+        "active_profile": active_profile,
         # CRAG — inicialización explícita obligatoria
         "doc_quality": "",
         "grade_score": 0.0,

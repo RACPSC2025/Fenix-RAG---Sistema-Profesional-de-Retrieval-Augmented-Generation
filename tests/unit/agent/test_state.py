@@ -134,6 +134,8 @@ class TestAgentState:
             "messages", "session_id", "user_query", "active_query",
             "uploaded_files", "ingestion_plans", "ingested_documents",
             "retrieval_results", "retrieval_strategy",
+            # Skill Pack [Fase 10]
+            "active_profile",
             # CRAG
             "doc_quality", "grade_score", "crag_route", "crag_retry_count",
             # Generación
@@ -156,3 +158,15 @@ class TestAgentState:
     def test_initial_state_custom_max_iterations(self) -> None:
         state = initial_state(user_query="test", max_iterations=5)
         assert state["max_iterations"] == 5
+
+    # ── Skill Pack [Fase 10] ──────────────────────────────────────────────────
+
+    def test_initial_state_active_profile_default_empty(self) -> None:
+        """active_profile debe comenzar en '' para que generation_node use default."""
+        state = initial_state(user_query="test")
+        assert "active_profile" in state
+        assert state["active_profile"] == ""
+
+    def test_initial_state_active_profile_explicit(self) -> None:
+        state = initial_state(user_query="test", active_profile="ai-rag-engineer")
+        assert state["active_profile"] == "ai-rag-engineer"
