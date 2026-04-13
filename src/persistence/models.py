@@ -450,3 +450,122 @@ class QueryLog(TimestampMixin, Base):
             f"query={self.query_text[:40]!r}, "
             f"score={self.reflection_score})"
         )
+
+
+# ─── ReflectionLog ──────────────────────────────────────────────────────────────
+
+class ReflectionLog(TimestampMixin, Base):
+    """
+    Historial de ciclos de auto-reflexión por sesión.
+
+    Permite auditar cada vez que el agente re-evaluó su propia respuesta,
+    qué score obtuvo, y si reformuló la query para re-retrieval.
+    """
+
+    __tablename__ = "reflection_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    session_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("sessions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    message_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("messages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # Contenido de la reflexión
+    score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    is_grounded: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    has_hallucination: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    feedback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reformulated_query: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Relación
+    session: Mapped[Optional[Session]] = relationship(
+        "Session", back_populates="reflection_logs", lazy="select"
+    )
+
+    __table_args__ = (
+        Index("ix_reflection_logs_session", "session_id", "created_at"),
+        Index("ix_reflection_logs_score", "score"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"ReflectionLog(id={self.id}, session={self.session_id}, "
+            f"score={self.score})"
+        )
+
+
+# ─── UserProfile [Fase 10] ────────────────────────────────────────────────────
+
+class UserProfile(TimestampMixin, Base):
+    """
+    Perfil de preferencias del usuario para el agente.
+
+    Persiste qué skill pack activa el usuario y overrides de comportamiento.
+    Se vincula por user_identifier (email/JWT sub) para no depender de
+    una tabla users que se crea en Fase 14 (BYOK auth).
+
+    Diseño intencional — sin FK a users:
+      Session.user_identifier == UserProfile.user_identifier (por igualdad de string)
+      Esto permite que Sessions existan sin UserProfile — en ese caso,
+      el agente usa el perfil default del SkillRegistry ("general-dev").
+      Cuando llegue Fase 14 se agrega el FK en una nueva migration.
+
+    preferred_profile debe corresponder a un perfil en registry.json.
+    Si no existe, generation_node hace fallback a default_profile del registry.
+    """
+
+    __tablename__ = "user_profiles"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    user_identifier: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        unique=True,
+        index=True,
+        comment="Email o JWT sub — mismo campo que Session.user_identifier",
+    )
+    preferred_profile: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        default="general-dev",
+        comment="Nombre del skill pack activo. Debe existir en registry.json",
+    )
+    custom_system_prompt: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Override del system prompt base. None = usar INDEX.md del pack",
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+        comment="False = ignorar este perfil y usar default del registry",
+    )
+
+    __table_args__ = (
+        Index("ix_user_profiles_identifier", "user_identifier"),
+        Index("ix_user_profiles_profile", "preferred_profile"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"UserProfile("
+            f"user={self.user_identifier!r}, "
+            f"profile={self.preferred_profile!r}, "
+            f"active={self.is_active})"
+        )

@@ -10,7 +10,8 @@
       "Bash(mkdir *)",
       "Bash(move *)",
       "Bash(copy *)",
-      "Bash(dir *)"
+      "Bash(dir *)",
+      "mcp__sequential-thinking__sequentialthinking"
     ]
   },
   "$version": 3
