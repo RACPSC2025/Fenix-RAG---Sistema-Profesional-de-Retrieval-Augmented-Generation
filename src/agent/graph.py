@@ -1,4 +1,4 @@
-"""
+r"""
 Grafo LangGraph principal de Fénix RAG.
 
 Arquitectura del grafo:

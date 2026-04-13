@@ -1,4 +1,4 @@
-"""
+r"""
 Loader de PDF nativo usando PyMuPDF (fitz).
 
 Diferencias respecto al código original (pdf_simple.py):

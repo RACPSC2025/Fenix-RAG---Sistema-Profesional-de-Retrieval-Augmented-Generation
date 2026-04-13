@@ -99,6 +99,7 @@ class TestUserProfileRepository:
         from src.persistence.repositories.user_profile_repo import upsert_profile
 
         mock_db = AsyncMock()
+        mock_db.add = MagicMock()  # add() es síncrono en SQLAlchemy
 
         # get_profile_for_user retorna None (no existe)
         mock_result = MagicMock()
