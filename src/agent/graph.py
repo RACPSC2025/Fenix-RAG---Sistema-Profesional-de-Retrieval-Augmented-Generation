@@ -16,28 +16,44 @@ Arquitectura del grafo:
               └────────┬──────┘   │
                        │          │
               ┌────────▼──────────▼──┐
-              │      retrieval       │  ← EnsembleRetriever (hybrid/full)
+              │      retrieval       │  ← Multi-Query Fusion + dedup
               └────────────┬─────────┘
                            │
               ┌────────────▼─────────┐
-              │      generation      │  ← LLM + contexto
-              └────────────┬─────────┘
-                           │
-              ┌────────────▼─────────┐
-              │      reflection      │  ← Self-evaluation
-              └──────┬───────┬───────┘
-              score  │       │ score
-              >= 0.8 │       │ < 0.8
-                     │       │
-           ┌─────────▼──┐  ┌─▼──────────────────┐
-           │   __end__  │  │ retrieval (retry)   │
-           └────────────┘  └────────────────────┘
-                            (máx. max_iterations)
+              │        grade         │  ← CRAG → escribe crag_route
+              └──────┬───────────────┘
+      correct / max  │   \ ambiguous|incorrect (+ retry guard)
+      retries agot.  │
+              ┌──────▼───────┐   ┌──────────────────────┐
+              │  generation  │   │  retrieval (retry)   │
+              └──────┬───────┘   └──────────────────────┘
+                     │
+              ┌──────▼───────┐
+              │  reflection  │  ← escribe reflection_route (NO route)
+              └──────┬───┬───┘
+   reflection_route  │   │ reflection_route
+         == "END"    │   │ == "retrieval"
+                     │   │
+              ┌──────▼─┐  └─▼──────────────────┐
+              │ __end__ │   │ retrieval (retry) │
+              └─────────┘   └───────────────────┘
+                             (máx. max_iterations)
 
-Herramientas disponibles para el agente ReAct (via ToolNode):
+ROUTING — CAMPOS AISLADOS POR RESPONSABILIDAD:
+  route_after_router     → lee `route`           (document_router)
+  route_after_ingestion  → lee `error`           (ingestion_node)
+  route_after_grading    → lee `crag_route`      (grade_documents_node)
+  route_after_generation → lee `messages`        (generation_node / ToolNode)
+  route_after_reflection → lee `reflection_route`(reflection_node)
+
+  Ninguna función de routing lee el mismo campo que otra.
+  Esto elimina toda posibilidad de colisión de estado entre nodos.
+
+Herramientas disponibles (via wrapped_tool_node con sync memory):
   - ingest_pdf, ingest_excel, ingest_word, ingest_image_pdf
   - semantic_search, hybrid_search, article_lookup
   - list_indexed_documents
+  - save_context, retrieve_context, list_context_keys, clear_context
 """
 
 from __future__ import annotations
@@ -79,8 +95,6 @@ from src.config.logging import get_logger
 
 log = get_logger(__name__)
 
-# ─── Todas las tools disponibles para el agente ReAct ─────────────────────────
-
 ALL_TOOLS = [
     ingest_pdf,
     ingest_excel,
@@ -99,18 +113,14 @@ ALL_TOOLS = [
 
 # ─── Funciones de routing condicional ─────────────────────────────────────────
 
-def route_after_router(
-    state: AgentState,
-) -> Literal["ingestion", "retrieval"]:
-    """Después del document_router: ¿hay archivos para ingestar?"""
+def route_after_router(state: AgentState) -> Literal["ingestion", "retrieval"]:
+    """Lee `route` — escrito por document_router_node."""
     route = state.get("route", "retrieval")
     return "ingestion" if route == "ingestion" else "retrieval"
 
 
-def route_after_ingestion(
-    state: AgentState,
-) -> Literal["retrieval", "__end__"]:
-    """Después de ingestion: ¿éxito o error fatal?"""
+def route_after_ingestion(state: AgentState) -> Literal["retrieval", "__end__"]:
+    """Lee `error` e `ingested_documents` — escritos por ingestion_node."""
     if state.get("error") and not state.get("ingested_documents"):
         return END
     return "retrieval"
@@ -120,13 +130,17 @@ def route_after_reflection(
     state: AgentState,
 ) -> Literal["retrieval", "__end__"]:
     """
-    Después de reflection: ¿respuesta aceptable o necesita re-retrieval?
+    Lee `reflection_route` — escrito exclusivamente por reflection_node.
 
-    END   → respuesta aprobada (score >= 0.8 o iteraciones agotadas)
-    retrieval → score bajo, reformulated_query disponible
+    NO lee `route` para evitar colisión con:
+      - CRAG (escribe `crag_route`)
+      - supervisor (escribe `route`)
+
+    "END"       → respuesta aprobada o iteraciones agotadas
+    "retrieval" → score bajo, active_query reformulada disponible
     """
-    route = state.get("route", "END")
-    if route == "END":
+    reflection_route = state.get("reflection_route", "END")
+    if reflection_route == "END":
         return END
     return "retrieval"
 
@@ -135,9 +149,8 @@ def route_after_generation(
     state: AgentState,
 ) -> Literal["tools", "reflection"]:
     """
-    Después de generation en modo ReAct:
-    Si el último mensaje del LLM contiene tool_calls → ToolNode.
-    Si no → reflection.
+    Lee `messages` — si el último mensaje tiene tool_calls → ToolNode.
+    Patrón ReAct estándar de LangGraph.
     """
     messages = state.get("messages", [])
     if messages:
@@ -157,11 +170,8 @@ def build_graph(
     Construye y compila el StateGraph principal de Fénix RAG.
 
     Args:
-        with_tools: Si True, agrega ToolNode para el ciclo ReAct.
-                    En producción siempre True. False para tests simples.
-        checkpointer: Checkpointer de LangGraph para persistencia de estado
-                      entre invocaciones (ej: SqliteSaver o PostgresSaver).
-                      None = sin persistencia (stateless).
+        with_tools: Si True, agrega wrapped_tool_node con sync de memoria.
+        checkpointer: Checkpointer para persistencia entre invocaciones.
 
     Returns:
         StateGraph compilado listo para graph.invoke().
@@ -171,35 +181,36 @@ def build_graph(
     # ── Nodos ─────────────────────────────────────────────────────────────────
     builder.add_node("document_router", document_router_node)
     builder.add_node("ingestion", ingestion_node)
-    builder.add_node(
-        "retrieval",
-        retrieval_node,
-        retry=3,  # Reintentar hasta 3 veces ante fallos transitorios
-    )
+    builder.add_node("retrieval", retrieval_node, retry=3)
     builder.add_node("grade", grade_documents_node)
-    builder.add_node(
-        "generation",
-        generation_node,
-        retry=2,
-    )
+    builder.add_node("generation", generation_node, retry=2)
     builder.add_node("reflection", reflection_node)
     builder.add_node("supervisor", supervisor_node)
 
-    if with_tools:
-        from src.agent.tools.memory_tools import get_memory_store
+    # Context Window Manager — comprime historial si supera el umbral
+    from src.agent.middleware.context_window_manager import context_manager_node  # noqa: PLC0415
+    builder.add_node("context_manager", context_manager_node)
 
+    if with_tools:
+        from src.agent.tools.memory_tools import get_memory_store, get_context_metrics  # noqa: PLC0415
+
+        # _tool_node se define UNA sola vez — evita GC pressure en alta concurrencia
         _tool_node = ToolNode(tools=ALL_TOOLS)
 
-        def wrapped_tool_node(state: AgentState):
-            # Sync inicial: in-memory store carga estado inyectado
+        def wrapped_tool_node(state: AgentState) -> dict:
+            """
+            Envuelve ToolNode con sync bidireccional de session_memory.
+
+            1. sync_from_state: PostgreSQL (via checkpointer) → in-memory store
+            2. _tool_node.invoke: tools mutan el in-memory store
+            3. sync_to_state: in-memory store → estado del grafo → PostgreSQL
+            """
             store = get_memory_store()
             session_id = state.get("session_id", "default")
             store.sync_from_state(session_id, state.get("session_memory", {}))
-            
-            # Ejecutar herramientas usando instancia reutilizada (pueden mutar el store)
+
             result = _tool_node.invoke(state)
-            
-            # Sync final: persistir hacia el estado del agente
+
             updated_memory = store.sync_to_state(session_id)
             if isinstance(result, dict):
                 result["session_memory"] = updated_memory
@@ -209,7 +220,7 @@ def build_graph(
 
     # ── Edges lineales ────────────────────────────────────────────────────────
     builder.add_edge(START, "document_router")
-    builder.add_edge("retrieval", "grade")
+    builder.add_edge("retrieval", "grade")   # CRAG evalúa ANTES de generation
 
     # ── Edges condicionales ───────────────────────────────────────────────────
     builder.add_conditional_edges(
@@ -224,6 +235,15 @@ def build_graph(
         {"retrieval": "retrieval", END: END},
     )
 
+    # CRAG: route_after_grading lee `crag_route` (via crag.py)
+    # correct / max_retries_agotados → generation
+    # ambiguous | incorrect (con retries) → retrieval
+    builder.add_conditional_edges(
+        "grade",
+        route_after_grading,          # definida en crag.py, lee crag_route
+        {"generation": "generation", "retrieval": "retrieval"},
+    )
+
     if with_tools:
         builder.add_conditional_edges(
             "generation",
@@ -234,17 +254,14 @@ def build_graph(
     else:
         builder.add_edge("generation", "reflection")
 
-    builder.add_conditional_edges(
-        "reflection",
-        route_after_reflection,
-        {"retrieval": "retrieval", END: END},
-    )
+    # Reflection → context_manager → END/retrieval
+    # El context_manager comprime el historial si es necesario, luego se ruta
+    builder.add_edge("reflection", "context_manager")
 
-    # CRAG grading: correct → generation, ambiguous/incorrect → retrieval (retry)
     builder.add_conditional_edges(
-        "grade",
-        route_after_grading,
-        {"generation": "generation", "retrieval": "retrieval"},
+        "context_manager",
+        route_after_reflection,  # Sigue leyendo reflection_route
+        {"retrieval": "retrieval", END: END},
     )
 
     # ── Compilar ──────────────────────────────────────────────────────────────
@@ -252,12 +269,11 @@ def build_graph(
     if checkpointer is not None:
         compile_kwargs["checkpointer"] = checkpointer
 
-    # Node caching para evitar re-ejecución de nodos idénticos
     try:
         from langgraph.cache.memory import InMemoryCache  # noqa: PLC0415
         compile_kwargs["cache"] = InMemoryCache()
     except ImportError:
-        pass  # Cache no disponible — continúa sin ella
+        pass
 
     graph = builder.compile(**compile_kwargs)
 
@@ -267,11 +283,10 @@ def build_graph(
         with_tools=with_tools,
         with_checkpointer=checkpointer is not None,
     )
-
     return graph
 
 
-# ─── Singleton del grafo ──────────────────────────────────────────────────────
+# ─── Singleton ────────────────────────────────────────────────────────────────
 
 _graph: StateGraph | None = None
 
@@ -281,19 +296,10 @@ def get_graph(
     checkpointer: Any | None = None,
     force_rebuild: bool = False,
 ) -> StateGraph:
-    """
-    Retorna la instancia singleton del grafo compilado.
-
-    Args:
-        with_tools: Incluir ToolNode en el grafo.
-        checkpointer: Checkpointer para persistencia de estado.
-        force_rebuild: Forzar reconstrucción (útil en tests).
-    """
+    """Retorna la instancia singleton del grafo compilado."""
     global _graph  # noqa: PLW0603
-
     if _graph is None or force_rebuild:
         _graph = build_graph(with_tools=with_tools, checkpointer=checkpointer)
-
     return _graph
 
 
@@ -309,18 +315,12 @@ def run_agent(
     """
     Ejecuta el agente Fénix RAG para una query del usuario.
 
-    Args:
-        user_query: Pregunta del usuario.
-        uploaded_files: Paths a archivos que el usuario quiere consultar.
-        session_id: ID de sesión para trazabilidad y checkpointing.
-        max_iterations: Máximo de ciclos reflection → re-retrieval.
-        config: Config de LangGraph (ej: {"configurable": {"thread_id": session_id}}).
-
     Returns:
-        Dict con final_answer, sources, reflection, iteration_count.
+        Dict con final_answer, sources, reflection, iteration_count,
+        retrieval_strategy, doc_quality, grade_score, generation_mode,
+        crag_retry_count, ingested_files.
     """
     graph = get_graph()
-
     state = initial_state(
         user_query=user_query,
         session_id=session_id,
@@ -361,6 +361,10 @@ def run_agent(
         answer_len=len(answer),
         iterations=final_state.get("iteration_count", 0),
         sources=len(final_state.get("sources", [])),
+        doc_quality=final_state.get("doc_quality", ""),
+        grade_score=final_state.get("grade_score", 0.0),
+        generation_mode=final_state.get("generation_mode", ""),
+        crag_retry_count=final_state.get("crag_retry_count", 0),
     )
 
     return {
@@ -369,6 +373,10 @@ def run_agent(
         "reflection": final_state.get("reflection"),
         "iteration_count": final_state.get("iteration_count", 0),
         "retrieval_strategy": final_state.get("retrieval_strategy", ""),
+        "doc_quality": final_state.get("doc_quality", ""),
+        "grade_score": final_state.get("grade_score", 0.0),
+        "generation_mode": final_state.get("generation_mode", ""),
+        "crag_retry_count": final_state.get("crag_retry_count", 0),
         "ingested_files": [
             p["source_path"] for p in final_state.get("ingestion_plans", [])
         ],
@@ -383,35 +391,31 @@ async def arun_agent(
 ) -> dict[str, Any]:
     """Versión async de run_agent para uso en FastAPI / endpoints async."""
     graph = get_graph()
-
     state = initial_state(
         user_query=user_query,
         session_id=session_id,
         uploaded_files=uploaded_files,
         max_iterations=max_iterations,
     )
-
     config = {"configurable": {"thread_id": session_id}} if session_id else {}
 
     try:
         final_state = await graph.ainvoke(state, config=config)
     except Exception as exc:
         log.error("agent_arun_failed", error=str(exc))
-        return {
-            "final_answer": "Error procesando la consulta.",
-            "sources": [],
-            "error": str(exc),
-        }
+        return {"final_answer": "Error procesando la consulta.", "sources": [], "error": str(exc)}
 
     answer = (
         final_state.get("final_answer")
         or final_state.get("draft_answer")
         or "No encontré información relevante."
     )
-
     return {
         "final_answer": answer,
         "sources": final_state.get("sources", []),
         "reflection": final_state.get("reflection"),
         "iteration_count": final_state.get("iteration_count", 0),
+        "doc_quality": final_state.get("doc_quality", ""),
+        "grade_score": final_state.get("grade_score", 0.0),
+        "generation_mode": final_state.get("generation_mode", ""),
     }

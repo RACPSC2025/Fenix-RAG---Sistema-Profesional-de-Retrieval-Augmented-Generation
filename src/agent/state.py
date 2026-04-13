@@ -14,10 +14,22 @@ Ciclo de vida del estado en el grafo:
   2. `document_router` → rellena `ingestion_plan`
   3. `ingestion_node` → rellena `ingested_documents`
   4. `retrieval_node` → rellena `retrieval_results`
-  5. `generation_node` → rellena `draft_answer`
-  6. `reflection_node` → rellena `reflection_score` y `reflection_feedback`
-  7. Si score < umbral → vuelve a `retrieval_node` con `reformulated_query`
-  8. Si score >= umbral → `__end__` con `final_answer`
+  5. `grade_node` → rellena `doc_quality`, `grade_score`, `crag_route`
+  6. `generation_node` → rellena `draft_answer`, `generation_mode`
+  7. `reflection_node` → rellena `reflection`, `reflection_route`
+  8. Si reflection_route == "retrieval" → vuelve a retrieval con `active_query`
+  9. Si reflection_route == "END" → `__end__` con `final_answer`
+
+CAMPOS DE ROUTING — AISLADOS POR RESPONSABILIDAD:
+  `route`            → solo supervisor_node y document_router (legacy)
+  `crag_route`       → exclusivo de grade_documents_node → route_after_grading
+  `reflection_route` → exclusivo de reflection_node → route_after_reflection
+  Los tres campos son distintos para evitar colisión de estado entre nodos.
+
+PROTECCIÓN ANTI-LOOP:
+  `crag_retry_count` se incrementa en cada re-retrieval disparado por CRAG.
+  Cuando alcanza MAX_CRAG_RETRIES (en crag.py), el grader fuerza
+  `crag_route = "generation"` aunque los docs sean subóptimos.
 """
 
 from __future__ import annotations
@@ -43,7 +55,7 @@ class IngestionPlan(TypedDict):
     loader_type: str            # "pymupdf" | "ocr" | "docling" | "word" | "excel"
     cleaner_profile: str        # "technical" | "contract" | "ocr_output" | "default"
     requires_ocr: bool
-    document_type: str          # "decreto" | "resolución" | "contrato" | "circular" | "excel"
+    document_type: str          # tipo genérico del documento
     source_path: str            # path absoluto al archivo
     mime_type: str
     confidence: float           # confianza de la clasificación [0.0 - 1.0]
@@ -72,11 +84,12 @@ class AgentState(TypedDict):
     LangGraph reemplaza campos a menos que usen un operador acumulativo.
 
     Convención de nombres:
-      `*_node`    — output de un nodo específico
-      `*_plan`    — planes/decisiones tomadas por skills
-      `*_results` — resultados de operaciones de retrieval
-      `draft_*`   — respuesta en construcción (pre-reflexión)
-      `final_*`   — respuesta aprobada post-reflexión
+      `*_plan`        — planes/decisiones tomadas por skills
+      `*_results`     — resultados de operaciones de retrieval
+      `draft_*`       — respuesta en construcción (pre-reflexión)
+      `final_*`       — respuesta aprobada post-reflexión
+      `crag_*`        — campos exclusivos del CRAG grading
+      `reflection_*`  — campos exclusivos del nodo de reflexión
     """
 
     # ── Mensajes (acumulativos) ───────────────────────────────────────────────
@@ -85,41 +98,47 @@ class AgentState(TypedDict):
     # ── Contexto de la sesión ─────────────────────────────────────────────────
     session_id: str
     user_query: str             # query original del usuario (sin modificar)
-    active_query: str           # query actual (puede ser reformulada por reflection)
+    active_query: str           # query actual (puede ser reformulada)
 
     # ── Documentos del usuario ────────────────────────────────────────────────
-    uploaded_files: list[str]   # paths a archivos subidos por el usuario
-    ingestion_plans: list[IngestionPlan]  # un plan por archivo
-    ingested_documents: list[Document]   # chunks resultantes de la ingestion
+    uploaded_files: list[str]
+    ingestion_plans: list[IngestionPlan]
+    ingested_documents: list[Document]
 
     # ── Retrieval ─────────────────────────────────────────────────────────────
-    retrieval_results: list[Document]    # docs recuperados para responder
-    retrieval_strategy: str              # estrategia usada ("hybrid", "full", etc.)
+    retrieval_results: list[Document]
+    retrieval_strategy: str
+
+    # ── CRAG — campos propios, NO compartidos con reflection ni supervisor ─────
+    doc_quality: str            # "correct" | "ambiguous" | "incorrect"
+    grade_score: float          # score CRAG (0.0-1.0), leído por generation_node
+    crag_route: str             # "generation"|"retrieval" — leído por route_after_grading
+    crag_retry_count: int       # reintentos CRAG — protege contra loops infinitos
 
     # ── Generación ────────────────────────────────────────────────────────────
     draft_answer: str
     final_answer: str
-    sources: list[dict[str, str]]        # [{source, article, page}]
+    sources: list[dict[str, str]]
+    generation_mode: str        # "direct"|"rethinking"|"rethinking_low_confidence"|"no_docs"
 
-    # ── Reflexión ─────────────────────────────────────────────────────────────
+    # ── Reflexión — campos propios, NO compartidos con CRAG ni supervisor ──────
     reflection: ReflectionOutput | None
-    iteration_count: int                 # número de intentos de generación
-    max_iterations: int                  # límite de iteraciones (default: 2)
+    reflection_route: str       # "END"|"retrieval" — leído por route_after_reflection
+    iteration_count: int
+    max_iterations: int
 
     # ── Memoria de sesión (persistida via checkpointer) ──────────────────────
-    session_memory: dict[str, str]       # clave → valor para contexto entre iteraciones
+    session_memory: dict[str, str]
 
     # ── Metadata del grafo ────────────────────────────────────────────────────
-    error: str | None                    # mensaje de error si algo falla
-    route: str                           # próximo nodo ("END", "retrieval", etc.)
-    grade_score: float                   # CRAG grading score (0.0-1.0)
-    generation_mode: str                 # "direct" | "rethinking" | "rethinking_low_confidence" | "no_docs"
+    error: str | None
+    route: str                  # legacy: document_router y supervisor_node únicamente
 
     # ── Métricas del pipeline (observabilidad) ───────────────────────────────
-    pipeline_metrics: dict[str, dict]    # {node_name: {start_ms, end_ms, duration_ms, docs_count, extra}}
+    pipeline_metrics: dict[str, dict]
 
     # ── Managed values (LangGraph internal) ──────────────────────────────────
-    remaining_steps: RemainingSteps      # pasos restantes antes del límite de recursión
+    remaining_steps: RemainingSteps
 
 
 # ─── Estado inicial ───────────────────────────────────────────────────────────
@@ -163,7 +182,14 @@ def initial_state(
         "session_memory": {},
         "error": None,
         "route": "",
+        # CRAG — inicialización explícita obligatoria
+        "doc_quality": "",
         "grade_score": 0.0,
+        "crag_route": "",
+        "crag_retry_count": 0,
+        # Reflection — inicialización explícita obligatoria
+        "reflection_route": "",
         "generation_mode": "",
+        # Métricas
         "pipeline_metrics": {},
     }

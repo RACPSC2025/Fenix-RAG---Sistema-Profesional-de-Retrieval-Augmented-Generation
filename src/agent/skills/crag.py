@@ -2,25 +2,31 @@
 CRAG — Corrective RAG.
 
 Evalúa la calidad de los documentos recuperados y decide:
-  - CORRECT (>0.7): documentos relevantes → generar respuesta directamente
+  - CORRECT  (>0.7): documentos relevantes → generar respuesta directamente
   - AMBIGUOUS (0.3-0.7): parcialmente relevantes → re-retrieve con query reformulada
   - INCORRECT (<0.3): no relevantes → descartar y re-retrieve con step-back query
 
 Sin dependencia de búsqueda web: cuando los docs son insuficientes,
 se reescribe la query (rewriting o step-back) y se reintenta el retrieval.
 
+CONTRATO DE ESTADO:
+  Escribe → `crag_route`, `crag_retry_count`, `doc_quality`, `grade_score`
+  NO escribe → `route` (ese campo es de document_router y supervisor)
+  route_after_grading lee `crag_route`, NO `route`
+
+PROTECCIÓN ANTI-LOOP:
+  MAX_CRAG_RETRIES = 2. Si crag_retry_count >= MAX_CRAG_RETRIES, fuerza
+  crag_route = "generation" con los docs actuales, aunque sean subóptimos.
+  Esto garantiza que el grafo siempre termina.
+
 Uso en el grafo:
-    from src.agent.skills.crag import grade_documents, route_after_grading
+    from src.agent.skills.crag import grade_documents_node, route_after_grading
 
-    # En el nodo del grafo:
-    def grade_node(state: AgentState) -> dict:
-        return grade_documents(state)
-
-    # Edge condicional:
+    builder.add_edge("retrieval", "grade")
     builder.add_conditional_edges(
         "grade",
         route_after_grading,
-        {"correct": "generation", "ambiguous": "retrieval", "incorrect": "retrieval"},
+        {"generation": "generation", "retrieval": "retrieval"},
     )
 """
 
@@ -35,20 +41,17 @@ from src.config.providers import get_llm
 
 log = get_logger(__name__)
 
+# Máximo de reintentos antes de forzar generation con los docs actuales.
+MAX_CRAG_RETRIES: int = 2
+
 
 # ─── Structured output para el grader ────────────────────────────────────────
 
 class DocumentGrade(BaseModel):
     """Resultado del grading de documentos recuperados."""
 
-    quality: str = Field(
-        description="correct | ambiguous | incorrect"
-    )
-    score: float = Field(
-        ge=0.0,
-        le=1.0,
-        description="Relevancia general de los documentos (0-1).",
-    )
+    quality: str = Field(description="correct | ambiguous | incorrect")
+    score: float = Field(ge=0.0, le=1.0, description="Relevancia general (0-1).")
     reasoning: str = Field(description="Breve justificación del score.")
 
 
@@ -66,7 +69,7 @@ GRADER_SYSTEM = (
 )
 
 
-# ─── Función principal ───────────────────────────────────────────────────────
+# ─── Función principal de grading ────────────────────────────────────────────
 
 def grade_documents(
     query: str,
@@ -80,7 +83,7 @@ def grade_documents(
         documents: Lista de Documents recuperados.
 
     Returns:
-        DocumentGrade con quality (correct/ambiguous/incorrect), score y reasoning.
+        DocumentGrade con quality, score y reasoning.
     """
     if not documents:
         return DocumentGrade(
@@ -89,12 +92,11 @@ def grade_documents(
             reasoning="No se recuperaron documentos.",
         )
 
-    # Construir contexto compacto de los docs
     docs_summary = "\n---\n".join(
         f"[Doc {i + 1}] (source: {doc.metadata.get('source', '?')}, "
         f"chunk: {doc.metadata.get('chunk_index', '?')})\n"
         f"{doc.page_content[:500]}"
-        for i, doc in enumerate(documents[:5])  # Max 5 docs para grading
+        for i, doc in enumerate(documents[:5])
     )
 
     llm = get_llm(temperature=0)
@@ -110,7 +112,6 @@ def grade_documents(
         })
     except Exception as exc:
         log.warning("crag_grading_failed", error=str(exc))
-        # Fallback: ambiguous para reintentar
         return DocumentGrade(
             quality="ambiguous",
             score=0.5,
@@ -123,11 +124,10 @@ def grade_documents(
         score=grade.score,
         docs_count=len(documents),
     )
-
     return grade
 
 
-# ─── Query rewriting para re-retrieval ───────────────────────────────────────
+# ─── Query rewriting ─────────────────────────────────────────────────────────
 
 def rewrite_query_for_reretrieval(
     query: str,
@@ -137,33 +137,22 @@ def rewrite_query_for_reretrieval(
     """
     Reescribe la query para un nuevo intento de retrieval.
 
-    - Si ambiguous: reformula con más detalle técnico.
-    - Si incorrect: genera step-back query (más general).
-
-    Args:
-        query: Consulta original.
-        grade: Resultado del grading.
-        documents: Docs recuperados (para contexto del grader).
-
-    Returns:
-        Query reformulada para re-retrieval.
+    - ambiguous: reformula con más detalle técnico.
+    - incorrect: genera step-back query (más general).
     """
     llm = get_llm(temperature=0)
 
     if grade.quality == "ambiguous":
         prompt = (
             "Los documentos recuperados son parcialmente relevantes. "
-            "Reformula la siguiente consulta para ser más específica y técnica, "
-            "de modo que el sistema de retrieval pueda encontrar documentos más precisos.\n\n"
+            "Reformula la siguiente consulta para ser más específica y técnica.\n\n"
             f"Consulta original: {query}\n\n"
             "Consulta reformulada (SOLO la consulta, sin explicaciones):"
         )
     else:
-        # incorrect → step-back: query más general
         prompt = (
             "Los documentos recuperados no son relevantes. "
-            "Genera una consulta más amplia y general sobre el tema de fondo "
-            "para obtener contexto adicional.\n\n"
+            "Genera una consulta más amplia y general sobre el tema de fondo.\n\n"
             f"Consulta específica: {query}\n\n"
             "Consulta general (SOLO la consulta, sin explicaciones):"
         )
@@ -180,23 +169,30 @@ def rewrite_query_for_reretrieval(
         return result
     except Exception as exc:
         log.warning("crag_rewrite_failed", error=str(exc))
-        return query  # Fallback: query original
+        return query
 
 
-# ─── Helper para integración directa en nodos del grafo ──────────────────────
+# ─── Nodo del grafo ───────────────────────────────────────────────────────────
 
 def grade_documents_node(state: dict) -> dict:
     """
     Nodo de grading para el grafo LangGraph.
 
+    CONTRATO:
+      Escribe `crag_route` (no `route`) para no colisionar con reflection_node.
+      Incrementa `crag_retry_count` en cada re-retrieval.
+      Si crag_retry_count >= MAX_CRAG_RETRIES, fuerza generation.
+
     Args:
-        state: AgentState con user_query, retrieval_results.
+        state: AgentState con active_query, retrieval_results, crag_retry_count.
 
     Returns:
-        Dict con doc_quality, grade_score, active_query (si rewrite), route.
+        Dict con doc_quality, grade_score, crag_route, crag_retry_count,
+        y opcionalmente active_query reescrita.
     """
     query = state.get("active_query") or state.get("user_query", "")
     docs = state.get("retrieval_results", [])
+    retry_count = state.get("crag_retry_count", 0)
 
     grade = grade_documents(query, docs)
 
@@ -206,24 +202,56 @@ def grade_documents_node(state: dict) -> dict:
     }
 
     if grade.quality == "correct":
-        result["route"] = "generation"
+        result["crag_route"] = "generation"
+        log.info(
+            "crag_decision",
+            decision="generation",
+            quality=grade.quality,
+            score=grade.score,
+            retry_count=retry_count,
+        )
+
+    elif retry_count >= MAX_CRAG_RETRIES:
+        # Reintentos agotados → forzar generation con lo que hay.
+        # Es preferible responder con docs imperfectos que loopearse.
+        result["crag_route"] = "generation"
+        log.warning(
+            "crag_max_retries_reached",
+            retry_count=retry_count,
+            max_retries=MAX_CRAG_RETRIES,
+            quality=grade.quality,
+            score=grade.score,
+            action="forcing_generation_with_current_docs",
+        )
+
     else:
-        # Ambiguous o incorrect → reescribir query y re-retrieval
+        # Ambiguous o incorrect con retries disponibles → reescribir y reintentar
         rewritten = rewrite_query_for_reretrieval(query, grade, docs)
         result["active_query"] = rewritten
-        result["route"] = "retrieval"
+        result["crag_route"] = "retrieval"
+        result["crag_retry_count"] = retry_count + 1
+        log.info(
+            "crag_decision",
+            decision="retrieval_retry",
+            quality=grade.quality,
+            score=grade.score,
+            retry_count=retry_count + 1,
+            rewritten_query=rewritten[:60],
+        )
 
     return result
 
 
+# ─── Edge condicional ─────────────────────────────────────────────────────────
+
 def route_after_grading(state: dict) -> str:
     """
-    Edge condicional para el grafo LangGraph.
+    Edge condicional post-grading.
 
-    Args:
-        state: AgentState con doc_quality y route.
+    Lee `crag_route` — campo exclusivo del CRAG grader.
+    NO lee `route` para evitar colisión con reflection_node y supervisor.
 
     Returns:
         "generation" | "retrieval"
     """
-    return state.get("route", "generation")
+    return state.get("crag_route", "generation")
